@@ -1,6 +1,7 @@
 #![feature(async_fn_in_trait)]
 #![feature(error_in_core)]
 
+mod utils;
 pub mod yanet_core;
 pub mod yanet_multiplex;
 pub mod yanet_noise;

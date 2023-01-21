@@ -5,9 +5,12 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use snow::TransportState;
 
-use crate::yanet_core::{
-    channel::{Authenticated, Channel},
-    upgrade::{Named, Upgrade},
+use crate::{
+    utils::FutureTimeout,
+    yanet_core::{
+        channel::{Authenticated, Channel},
+        upgrade::{Named, Upgrade},
+    },
 };
 
 #[derive(Serialize, Deserialize)]
@@ -69,19 +72,17 @@ where
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             Self::handshake(&private_key, &channel, true).await?
         } else {
-            let task1 = async {
-                let msg: Message<Vec<u8>> = channel.recv_postcard().await?;
-                Ok(match msg {
-                    Message::BeginHandshake => false,
-                    Message::Payload(_) => true,
-                }) as anyhow::Result<bool>
-            };
-            let task2 = async {
-                futures_timer::Delay::new(Duration::from_millis(1000)).await;
-                Ok(true)
-            };
+            let msg: Option<Message<Vec<u8>>> = channel
+                .recv_postcard()
+                .timeout(Duration::from_millis(1000))
+                .await
+                .transpose()?;
 
-            let is_initiator = futures_lite::future::or(task1, task2).await?;
+            let is_initiator = match msg {
+                Some(Message::BeginHandshake) => false,
+                Some(Message::Payload(_)) => true,
+                None => true,
+            };
 
             if is_initiator {
                 let msg: Message<&[u8]> = Message::BeginHandshake;
