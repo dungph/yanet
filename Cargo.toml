@@ -1,0 +1,15 @@
+[package]
+name = "yanet"
+version = "0.0.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+postcard =  { version = "1", features = ["alloc"] }
+anyhow = { version = "1", features = ["std", "backtrace"] }
+snow = { version = "0.9" }
+futures-lite = { version = "1", default-features = false }
+futures-timer = { version = "3" }
+async-channel = { version = "1" }
