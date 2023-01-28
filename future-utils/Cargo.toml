@@ -1,0 +1,10 @@
+[package]
+name = "future-utils"
+version = "0.0.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+futures-timer = { version = "3"}
+futures-lite = { version = "1"}
