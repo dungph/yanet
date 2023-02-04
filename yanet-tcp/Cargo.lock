@@ -194,6 +194,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-timer"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e64b03909df88034c26dc1547e8970b91f98bdb65165d6a4e9110d94263dbb2c"
+
+[[package]]
 name = "gimli"
 version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -419,11 +425,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "yanet-relay"
+name = "yanet-tcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-channel",
- "futures-lite",
+ "futures-timer",
  "yanet-core",
 ]

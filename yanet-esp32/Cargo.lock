@@ -2611,6 +2611,7 @@ dependencies = [
  "yanet-core",
  "yanet-multiplex",
  "yanet-noise",
+ "yanet-tcp",
 ]
 
 [[package]]
@@ -2632,6 +2633,16 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "snow",
+ "yanet-core",
+]
+
+[[package]]
+name = "yanet-tcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "futures-timer",
  "yanet-core",
 ]
 

@@ -12,6 +12,12 @@ pub trait FutureTimeout: Future + Sized {
         };
         futures_lite::future::or(task1, task2).await
     }
+    async fn timeout_millis(self, millis: u64) -> Option<Self::Output> {
+        self.timeout(Duration::from_millis(millis)).await
+    }
+    async fn timeout_secs(self, secs: u64) -> Option<Self::Output> {
+        self.timeout(Duration::from_secs(secs)).await
+    }
 }
 
 impl<T: Future + Sized> FutureTimeout for T {}

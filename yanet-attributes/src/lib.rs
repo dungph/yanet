@@ -81,13 +81,13 @@ impl AttributesService {
                 if let Some(val) = self.get_attr(self.peer_id, &at) {
                     match val {
                         Value::Bool(val) => {
-                            self.set_attr(self.peer_id, &at, Value::Bool(!val));
+                            self.set_attr_notify(self.peer_id, &at, Value::Bool(!val));
                         }
                         Value::Number(val) => {
                             if val > 0.0 {
-                                self.set_attr(self.peer_id, &at, Value::Number(0.0));
+                                self.set_attr_notify(self.peer_id, &at, Value::Number(0.0));
                             } else {
-                                self.set_attr(self.peer_id, &at, Value::Number(1.0));
+                                self.set_attr_notify(self.peer_id, &at, Value::Number(1.0));
                             }
                         }
                         _ => {}
@@ -107,7 +107,7 @@ impl AttributesService {
             .flatten()
             .map(|a| a.value.clone())
     }
-    pub fn set_attr(&self, peer: PeerId, name: &str, data: Value) {
+    pub fn set_attr_notify(&self, peer: PeerId, name: &str, data: Value) {
         let mut attributes = self.attributes.borrow_mut();
         let thi = attributes
             .entry(peer)
@@ -121,19 +121,37 @@ impl AttributesService {
         thi.value = data;
         thi.listener.notify(usize::MAX);
     }
-    pub async fn upsert(&self, topic: &str, data: Value) {
-        self.upsert_peer(self.peer_id, topic, data).await
+    pub fn set_attr(&self, peer: PeerId, name: &str, data: Value) {
+        let mut attributes = self.attributes.borrow_mut();
+        let thi = attributes
+            .entry(peer)
+            .or_insert_with(|| BTreeMap::new())
+            .entry(name.to_owned())
+            .or_insert_with(|| Attribute {
+                value: Value::Null,
+                listener: Rc::new(Event::new()),
+                actions: Vec::new(),
+            });
+        thi.value = data;
     }
-
-    pub async fn upsert_peer(&self, peer: PeerId, name: &str, data: Value) {
-        self.set_attr(peer, name, data.clone());
-        for (peerid, subscriber) in self.peers.borrow().iter() {
+    pub async fn set_attr_and_share(&self, topic: &str, data: Value) {
+        self.set_attr(self.peer_id, topic, data.clone());
+        for (_peerid, subscriber) in self.peers.borrow().iter() {
             subscriber
-                .send(Message::Value(name.to_owned(), data.clone()))
+                .send(Message::Value(topic.to_owned(), data.clone()))
                 .await
                 .ok();
         }
     }
+    //pub async fn upsert_peer(&self, peer: PeerId, name: &str, data: Value) {
+    //    self.set_attr(peer, name, data.clone());
+    //    for (peerid, subscriber) in self.peers.borrow().iter() {
+    //        subscriber
+    //            .send(Message::Value(name.to_owned(), data.clone()))
+    //            .await
+    //            .ok();
+    //    }
+    //}
     pub async fn wait(&self, name: &str) -> Option<Value> {
         self.wait_peer(self.peer_id, name).await
     }
@@ -175,7 +193,7 @@ impl<C: Channel + Authenticated> Service<C> for AttributesService {
 
     async fn upgrade(&self, channel: C) -> anyhow::Result<Self::Output> {
         let peerid = channel.peer_id();
-        let (tx, rx) = bounded(1);
+        let (tx, rx) = bounded(5);
         let tx2 = tx.clone();
         self.peers.borrow_mut().insert(peerid, tx);
 

@@ -1,13 +1,20 @@
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+
 use crate::{Either, Or};
 
 use super::{channel::Channel, service::Service};
 
 pub trait Transport: Sized {
     type Channel;
-    async fn get(&self) -> Self::Channel;
+    async fn get(&self) -> anyhow::Result<Option<Self::Channel>>;
 
-    fn or<T>(self, other: T) -> Or<Self, T> {
-        Or { a: self, b: other }
+    fn or<T>(self, other: T) -> OrTransport<Self, T> {
+        OrTransport {
+            a_done: AtomicBool::new(false),
+            b_done: AtomicBool::new(false),
+            a: self,
+            b: other,
+        }
     }
 
     fn then<U>(self, upgrader: U) -> Then<Self, U> {
@@ -16,7 +23,7 @@ pub trait Transport: Sized {
             service: upgrader,
         }
     }
-    async fn handle<U>(self, upgrader: U)
+    async fn handle<U>(self, upgrader: U) -> anyhow::Result<()>
     where
         U: Service<Self::Channel>,
         U::Output: std::fmt::Debug,
@@ -24,8 +31,13 @@ pub trait Transport: Sized {
         let ex = async_executor::LocalExecutor::new();
         let task = async {
             loop {
-                let ch = self.get().await;
-                ex.spawn(upgrader.upgrade(ch)).detach();
+                let ch = self.get().await?;
+                match ch {
+                    Some(ch) => {
+                        ex.spawn(upgrader.upgrade(ch)).detach();
+                    }
+                    None => break Ok(()),
+                }
             }
         };
         let task2 = async {
@@ -33,17 +45,54 @@ pub trait Transport: Sized {
                 ex.tick().await;
             }
         };
-        futures_lite::future::or(task, task2).await;
+        futures_lite::future::or(task, task2).await
     }
 }
 
-impl<A: Transport, B: Transport> Transport for Or<A, B> {
+pub struct OrTransport<A, B> {
+    a_done: AtomicBool,
+    b_done: AtomicBool,
+    a: A,
+    b: B,
+}
+
+impl<A: Transport, B: Transport> Transport for OrTransport<A, B> {
     type Channel = Either<A::Channel, B::Channel>;
 
-    async fn get(&self) -> Self::Channel {
-        let task1 = async { Either::A(self.a.get().await) };
-        let task2 = async { Either::B(self.b.get().await) };
-        futures_lite::future::or(task1, task2).await
+    async fn get(&self) -> anyhow::Result<Option<Self::Channel>> {
+        if self.a_done.load(Relaxed) && self.b_done.load(Relaxed) {
+            Ok(None)
+        } else if self.a_done.load(Relaxed) {
+            if let Some(b) = self.b.get().await? {
+                Ok(Some(Either::B(b)))
+            } else {
+                self.b_done.store(true, Relaxed);
+                Ok(None)
+            }
+        } else if self.b_done.load(Relaxed) {
+            if let Some(a) = self.a.get().await? {
+                Ok(Some(Either::A(a)))
+            } else {
+                self.a_done.store(true, Relaxed);
+                Ok(None)
+            }
+        } else {
+            let task1 = async { Ok(Either::A(self.a.get().await?)) as anyhow::Result<_> };
+            let task2 = async { Ok(Either::B(self.b.get().await?)) };
+            let ret = futures_lite::future::or(task1, task2).await?;
+            match ret {
+                Either::A(Some(a)) => Ok(Some(Either::A(a))),
+                Either::B(Some(b)) => Ok(Some(Either::B(b))),
+                Either::A(None) => {
+                    self.a_done.store(true, Relaxed);
+                    Ok(None)
+                }
+                Either::B(None) => {
+                    self.b_done.store(true, Relaxed);
+                    Ok(None)
+                }
+            }
+        }
     }
 }
 
@@ -60,12 +109,11 @@ where
 {
     type Channel = B::Output;
 
-    async fn get(&self) -> <Then<A, B> as Transport>::Channel {
-        loop {
-            let channel = self.channel.get().await;
-            if let Ok(out) = self.service.upgrade(channel).await {
-                break out;
-            }
+    async fn get(&self) -> anyhow::Result<Option<<Then<A, B> as Transport>::Channel>> {
+        if let Some(channel) = self.channel.get().await? {
+            Ok(Some(self.service.upgrade(channel).await?))
+        } else {
+            Ok(None)
         }
     }
 }
@@ -75,7 +123,7 @@ where
 {
     type Channel = T::Channel;
 
-    async fn get(&self) -> <&T as Transport>::Channel {
+    async fn get(&self) -> anyhow::Result<Option<<&T as Transport>::Channel>> {
         (*self).get().await
     }
 }

@@ -1,174 +1,205 @@
 use anyhow::Result;
-use async_channel::{bounded, Receiver, Sender};
-use dashmap::DashMap;
+use async_channel::{bounded, unbounded, Receiver, Sender};
 use esp_idf_svc::espnow::{EspNow, BROADCAST};
-use esp_idf_sys::{esp_now_peer_info, esp_wifi_get_mac};
-use future_utils::FutureTimeout;
+use esp_idf_sys::esp_now_peer_info;
+use esp_idf_sys::esp_wifi_get_channel;
+use esp_idf_sys::esp_wifi_get_mac;
+use esp_idf_sys::esp_wifi_set_channel;
 use postcard::to_allocvec;
 use serde::{Deserialize, Serialize};
-use std::{borrow::Borrow, rc::Rc, sync::Arc, time::Duration};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::Relaxed;
+use std::sync::Mutex;
+use std::time::Instant;
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use yanet_core::{Channel, Transport};
 
 use crate::wifi::WifiService;
 
+pub fn set_channel(channel: u8) {
+    unsafe {
+        esp_wifi_set_channel(channel, 0);
+    }
+}
+pub fn get_channel() -> u8 {
+    let mut ret = 0u8;
+    let mut sech = 0u32;
+    unsafe {
+        esp_wifi_get_channel(&mut ret, &mut sech);
+    }
+    ret
+}
+
 #[derive(Serialize, Deserialize, Debug)]
-enum Packet<P: AsRef<[u8]> + Sized> {
-    Hello,
-    BeginTransport,
+struct RawPacket<P = Vec<u8>> {
+    destination: Option<[u8; 6]>,
+    payload: Packet<P>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+enum Packet<P = Vec<u8>> {
+    Ping { is_online: bool },
+    Pong { is_online: bool },
+    Begin,
     Message(P),
 }
 
-type Incoming = Receiver<([u8; 6], Receiver<Packet<Vec<u8>>>)>;
+type Pair<T> = (Sender<T>, Receiver<T>);
 
 #[derive(Clone)]
 pub struct EspNowService {
     mac: [u8; 6],
-    espnow: Rc<EspNow>,
-    incoming: Incoming,
+    espnow: Arc<EspNow>,
+    incoming: Pair<EspNowChannel>,
+    is_connected: Arc<AtomicBool>,
+    last_online_ping: Arc<Mutex<Instant>>,
 }
 
 impl EspNowService {
-    pub fn new(_: &WifiService) -> anyhow::Result<Self> {
-        let espnow = EspNow::take()?;
+    pub fn new(wifi: &WifiService<'_>) -> Result<Self> {
+        let espnow = Arc::new(EspNow::take()?);
         espnow.add_peer(esp_now_peer_info {
             peer_addr: BROADCAST,
-            ifidx: 1,
             ..Default::default()
         })?;
-        let (incoming_tx, incoming) = bounded(1);
-
-        let handlers: Arc<DashMap<[u8; 6], Sender<Packet<Vec<u8>>>>> = Arc::new(DashMap::new());
-        let mut my_mac = [0; 6];
+        let mut mac = [0; 6];
         unsafe {
-            esp_wifi_get_mac(1, &mut my_mac as *mut u8);
+            esp_wifi_get_mac(0, &mut mac as *mut u8);
         }
+        let this = EspNowService {
+            mac,
+            espnow: espnow.clone(),
+            incoming: bounded(10),
+            is_connected: wifi.is_connected.clone(),
+            last_online_ping: Arc::new(Mutex::new(Instant::now())),
+        };
+
+        let this2 = this.clone();
+        let mut handlers: BTreeMap<[u8; 6], Sender<Vec<u8>>> = Default::default();
         espnow.register_recv_cb(move |addr, data| {
             let addr: [u8; 6] = addr.try_into().unwrap();
-            if let Ok(data) = postcard::from_bytes::<([u8; 6], Packet<Vec<u8>>)>(data) {
-                if data.0 == BROADCAST || data.0 == my_mac {
-                    let sender = handlers
-                        .entry(addr)
-                        .and_modify(|sender| {
-                            if sender.is_closed() {
-                                println!("replace");
-                                let (tx, rx) = bounded(5);
-                                incoming_tx.try_send((addr, rx)).ok();
-                                *sender = tx;
+            let chan = |rx| EspNowChannel {
+                espnow: this2.clone(),
+                addr,
+                rx,
+            };
+            if let Ok(data) = postcard::from_bytes::<RawPacket>(&data) {
+                if data.destination == None || data.destination == Some(mac) {
+                    match data.payload {
+                        Packet::Ping { is_online } => {
+                            if is_online {
+                                *this2.last_online_ping.lock().unwrap() = Instant::now();
                             }
-                        })
-                        .or_insert_with(|| {
-                            println!("insert new");
-                            let (tx, rx) = bounded(5);
-                            incoming_tx.try_send((addr, rx)).ok();
-                            tx.clone()
-                        });
-                    if data.0 == my_mac {
-                        sender.try_send(data.1).ok();
+                            this2.send_pong(addr).ok();
+                        }
+                        Packet::Pong { is_online } => {
+                            if is_online {
+                                *this2.last_online_ping.lock().unwrap() = Instant::now();
+                            }
+                            if handlers.contains_key(&addr) {
+                            } else {
+                                let (tx, rx) = unbounded();
+                                handlers.insert(addr, tx);
+                                this2.incoming.0.try_send(chan(rx)).ok();
+                                this2.send_begin(addr).ok();
+                            }
+                        }
+                        Packet::Begin => {
+                            let (tx, rx) = unbounded();
+                            handlers.insert(addr, tx);
+                            this2.incoming.0.try_send(chan(rx)).ok();
+                        }
+                        Packet::Message(msg) => match handlers.get(&addr) {
+                            Some(sender) if !sender.is_closed() => {
+                                sender.try_send(msg).ok();
+                            }
+                            _ => {
+                                let (tx, rx) = unbounded();
+                                handlers.insert(addr, tx);
+                                this2.incoming.0.try_send(chan(rx)).ok();
+                            }
+                        },
                     }
                 }
             }
         })?;
-        Ok(Self {
-            espnow: Rc::new(espnow),
-            incoming,
-            mac: my_mac,
-        })
+        Ok(this)
     }
-
-    fn send_hello(&self, addr: [u8; 6]) -> anyhow::Result<()> {
-        let data = to_allocvec(&(addr, Packet::<&[u8]>::Hello))?;
-        self.espnow.as_ref().borrow().send(BROADCAST, &data)?;
-        Ok(())
-    }
-    fn send_begin(&self, addr: [u8; 6]) -> anyhow::Result<()> {
-        let data = to_allocvec(&(addr, Packet::<&[u8]>::BeginTransport))?;
-        self.espnow.as_ref().borrow().send(BROADCAST, &data)?;
-        Ok(())
-    }
-    fn send_payload(&self, addr: [u8; 6], payload: &[u8]) -> anyhow::Result<()> {
-        let data = to_allocvec(&(addr, Packet::<&[u8]>::Message(payload)))?;
-        self.espnow.as_ref().borrow().send(BROADCAST, &data)?;
-        Ok(())
-    }
-    pub async fn find_peer(&self) {}
-
-    pub fn advertise(&self) -> Result<()> {
-        let data = to_allocvec(&(BROADCAST, Packet::<&[u8]>::Hello))?;
+    fn send_packet(&self, addr: Option<[u8; 6]>, packet: Packet<&[u8]>) -> Result<()> {
+        let data = to_allocvec(&RawPacket {
+            destination: addr,
+            payload: packet,
+        })?;
         self.espnow.send(BROADCAST, &data)?;
         Ok(())
     }
-    async fn get_channel(&self) -> Result<EspNowChannel> {
-        println!("advertise");
-        self.advertise().unwrap();
-        let (addr, rx) = self.incoming.recv().await?;
-        self.send_hello(addr)?;
-        self.send_hello(addr)?;
-        self.send_begin(addr)?;
-
-        let result = async {
-            loop {
-                let packet = rx.recv().await?;
-                if let Packet::Hello = packet {
-                    continue;
-                }
-                if let Packet::BeginTransport = packet {
-                    break;
-                }
+    fn send_ping(&self) -> Result<()> {
+        self.send_packet(
+            None,
+            Packet::Ping {
+                is_online: self.is_connected.load(Relaxed),
+            },
+        )
+    }
+    fn send_pong(&self, addr: [u8; 6]) -> Result<()> {
+        self.send_packet(
+            Some(addr),
+            Packet::Pong {
+                is_online: self.is_connected.load(Relaxed),
+            },
+        )
+    }
+    fn send_begin(&self, addr: [u8; 6]) -> Result<()> {
+        self.send_packet(Some(addr), Packet::Begin)
+    }
+    fn send_payload(&self, addr: [u8; 6], payload: &[u8]) -> Result<()> {
+        self.send_packet(Some(addr), Packet::Message(payload))?;
+        Ok(())
+    }
+    pub async fn advertise(&self) -> Result<()> {
+        for ch in (1..15).rev() {
+            if self.is_connected.load(Relaxed) {
+                self.send_ping()?;
+                return Ok(());
+            } else if self.last_online_ping.lock().unwrap().elapsed() < Duration::from_secs(5) {
+                self.send_ping()?;
+                return Ok(());
+            } else {
+                set_channel(ch);
+                self.send_ping()?;
             }
-            Ok(()) as anyhow::Result<()>
+            futures_timer::Delay::new(Duration::from_millis(100)).await
         }
-        .timeout(Duration::from_millis(200))
-        .await;
-        if result.is_none() {
-            anyhow::bail!("Timeout")
-        }
-        Ok(EspNowChannel {
-            espnow: self.clone(),
-            addr,
-            rx,
-            is_init: addr > self.mac,
-        })
+
+        Ok(())
     }
 }
 
 impl Transport for EspNowService {
     type Channel = EspNowChannel;
-    async fn get(&self) -> <EspNowService as Transport>::Channel {
-        loop {
-            let result = self
-                .get_channel()
-                .timeout(Duration::from_millis(10000))
-                .await;
-            if let Some(Ok(item)) = result {
-                println!("new channel");
-                break item;
-            }
-        }
+    async fn get(&self) -> Result<Option<<EspNowService as Transport>::Channel>> {
+        self.advertise().await?;
+        Ok(Some(self.incoming.1.recv().await?))
     }
 }
 
 #[derive(Clone)]
 pub struct EspNowChannel {
-    is_init: bool,
     espnow: EspNowService,
     addr: [u8; 6],
-    rx: Receiver<Packet<Vec<u8>>>,
+    rx: Receiver<Vec<u8>>,
 }
+
 impl Channel for EspNowChannel {
     fn is_initiator(&self) -> bool {
-        self.is_init
+        self.espnow.mac > self.addr
     }
-    async fn recv(&self) -> anyhow::Result<Vec<u8>> {
-        loop {
-            if let Packet::Message(vec) = self.rx.recv().await? {
-                break Ok(vec);
-            } else {
-                self.rx.close();
-            }
-        }
+    async fn recv(&self) -> Result<Vec<u8>> {
+        Ok(self.rx.recv().await?)
     }
-    async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
+    async fn send(&self, data: &[u8]) -> Result<()> {
         self.espnow.send_payload(self.addr, data)?;
+        futures_timer::Delay::new(Duration::from_millis(10)).await;
         Ok(())
     }
 }

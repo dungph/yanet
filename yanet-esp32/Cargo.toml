@@ -16,8 +16,9 @@ opt-level = "z"
 [features]
 pio = ["esp-idf-sys/pio"]
 button = []
-light-pin13 = []
-light-pin3 = []
+ledc = []
+pin13 = []
+#ledc-pin3 = ["ledc"]
 
 [dependencies]
 yanet-core = { path = "../yanet-core/" }
@@ -25,6 +26,7 @@ yanet-multiplex = { path = "../yanet-multiplex/" }
 yanet-noise = { path = "../yanet-noise/" }
 yanet-attributes = { path = "../yanet-attributes" }
 yanet-broadcast = { path = "../yanet-broadcast/" }
+yanet-tcp = { path = "../yanet-tcp/" }
 future-utils = { path = "../future-utils/" }
 
 embedded-hal = { version = "1.0.0-alpha.9" }

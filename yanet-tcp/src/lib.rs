@@ -1,7 +1,8 @@
+#![feature(async_fn_in_trait)]
 use std::{
     cell::RefCell,
     io::{self, Read, Write},
-    net::{TcpStream, ToSocketAddrs},
+    net::{TcpListener, TcpStream, ToSocketAddrs},
     time::Duration,
 };
 
@@ -25,16 +26,26 @@ impl TcpTransport {
         self.incoming.0.send((true, stream)).await?;
         Ok(())
     }
+    pub async fn listen<A: ToSocketAddrs>(&self, addr: A) -> anyhow::Result<()> {
+        let listener = TcpListener::bind(addr)?;
+        listener.set_nonblocking(true)?;
+        loop {
+            let (stream, _addr) = listener.accept()?;
+            stream.set_nonblocking(true)?;
+            self.incoming.0.send((false, stream)).await?;
+        }
+    }
 }
+
 impl Transport for TcpTransport {
     type Channel = TcpChannel;
 
-    async fn get(&self) -> Self::Channel {
-        let (is_initiator, socket) = self.incoming.1.recv().await.unwrap();
-        TcpChannel {
+    async fn get(&self) -> anyhow::Result<Option<Self::Channel>> {
+        let (is_initiator, socket) = self.incoming.1.recv().await?;
+        Ok(Some(TcpChannel {
             is_initiator,
             socket: RefCell::new(socket),
-        }
+        }))
     }
 }
 pub struct TcpChannel {

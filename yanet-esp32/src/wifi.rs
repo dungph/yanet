@@ -1,160 +1,225 @@
-use anyhow::Result;
-use base58::ToBase58;
-use embedded_svc::wifi::{
-    AccessPointConfiguration, AuthMethod, ClientConfiguration, Configuration, Wifi,
-};
-use esp_idf_hal::modem::Modem;
-use esp_idf_svc::{eventloop::EspSystemEventLoop, wifi::EspWifi};
-use std::{cell::RefCell, net::Ipv4Addr, rc::Rc, time::Duration};
-
 use crate::storage::StorageService;
+use anyhow::Result;
+use async_channel::bounded;
+use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration, Wifi};
+use esp_idf_hal::modem::Modem;
+use esp_idf_svc::{
+    eventloop::EspSystemEventLoop,
+    wifi::{EspWifi, WifiEvent},
+};
+use esp_idf_sys::{smartconfig_event_got_ssid_pswd_t, smartconfig_event_t_SC_EVENT_GOT_SSID_PSWD};
+use std::{
+    cell::RefCell,
+    sync::{
+        atomic::{AtomicBool, Ordering::Relaxed},
+        Arc,
+    },
+    time::Duration,
+};
 
-pub fn get_mac() -> [u8; 6] {
-    let mut mac = [0u8; 6];
-    unsafe {
-        esp_idf_sys::esp_wifi_get_mac(1, &mut mac as *mut u8);
-    }
-    mac
-}
-
-#[derive(Clone)]
 pub struct WifiService<'a> {
-    wifi: Rc<RefCell<EspWifi<'a>>>,
+    wifi: RefCell<EspWifi<'a>>,
+    eventloop: EspSystemEventLoop,
+    pub(crate) is_connected: Arc<AtomicBool>,
 }
 
 impl<'a> WifiService<'a> {
-    pub fn new(modem: Modem, storage: &StorageService) -> anyhow::Result<Self> {
-        let wifi = EspWifi::new(
-            modem,
-            EspSystemEventLoop::take()?,
-            None, //Some(storage.default_nvs()),
-        )?;
+    pub fn new(
+        modem: Modem,
+        eventloop: EspSystemEventLoop,
+        storage: &StorageService,
+    ) -> anyhow::Result<Self> {
+        let mut wifi = EspWifi::new(modem, eventloop.clone(), None)?;
+        wifi.start()?;
+        unsafe {
+            esp_idf_sys::esp_wifi_set_channel(11, 0);
+        }
+        let is_connected = Arc::new(AtomicBool::new(false));
+        let is_connected2 = is_connected.clone();
+
         let this = Self {
-            wifi: Rc::new(RefCell::new(wifi)),
+            wifi: RefCell::new(wifi),
+            eventloop: eventloop.clone(),
+            is_connected,
         };
 
-        this.enable_ap()?;
-        this.start()?;
+        std::mem::forget(eventloop.subscribe(move |event: &WifiEvent| match event {
+            WifiEvent::StaConnected => is_connected2.store(true, Relaxed),
+            WifiEvent::StaDisconnected => is_connected2.store(true, Relaxed),
+            _ => {}
+        }));
+
+        this.set_conf_stored(storage)?;
         Ok(this)
     }
 
-    pub fn get_connected(&self) -> Result<Option<String>> {
-        match self.wifi.as_ref().borrow().get_configuration()? {
-            Configuration::Client(sta) => Ok(Some(sta.ssid.to_string())),
-            Configuration::Mixed(sta, _) => Ok(Some(sta.ssid.to_string())),
-            _ => Ok(None),
+    pub async fn smartconfig(&self, storage: &StorageService) -> Result<(String, String)> {
+        unsafe {
+            esp_idf_sys::esp_smartconfig_set_type(
+                esp_idf_sys::smartconfig_type_t_SC_TYPE_ESPTOUCH_V2,
+            );
+            let config = esp_idf_sys::smartconfig_start_config_t {
+                enable_log: false,
+                esp_touch_v2_enable_crypt: false,
+                esp_touch_v2_key: std::ptr::null_mut(),
+            };
+            esp_idf_sys::esp_smartconfig_start(&config);
         }
+
+        let (tx, rx) = bounded(5);
+
+        let sub = unsafe {
+            self.eventloop.subscribe_raw(
+                esp_idf_sys::SC_EVENT,
+                esp_idf_sys::ESP_EVENT_ANY_ID,
+                move |event_data| {
+                    if event_data.event_id == smartconfig_event_t_SC_EVENT_GOT_SSID_PSWD as i32 {
+                        let data = event_data.as_payload::<smartconfig_event_got_ssid_pswd_t>();
+                        let ssid =
+                            String::from_utf8_lossy(data.ssid.split(|b| *b == 0).next().unwrap())
+                                .to_string();
+                        let pwd = String::from_utf8_lossy(
+                            data.password.split(|b| *b == 0).next().unwrap(),
+                        )
+                        .to_string();
+                        tx.try_send((ssid, pwd)).ok();
+                    }
+                },
+            )?
+        };
+
+        let (ssid, pass) = rx.recv().await?;
+
+        unsafe {
+            esp_idf_sys::esp_smartconfig_stop();
+        }
+        drop(sub);
+        self.set_conf(&ssid, &pass)?;
+        storage.set("wifi_ssid", &ssid)?;
+        storage.set("wifi_pass", &pass)?;
+        Ok((ssid, pass))
     }
-    pub fn get_ip(&self) -> Result<Ipv4Addr> {
-        Ok(self.wifi.borrow().sta_netif().get_ip_info()?.ip)
-    }
-    pub fn start(&self) -> Result<()> {
-        self.wifi.as_ref().borrow_mut().start()?;
+
+    pub fn set_conf_stored(&self, storage: &StorageService) -> Result<()> {
+        let ssid: String = storage.get("wifi_ssid")?.unwrap_or("public".into());
+        let password: String = storage.get("wifi_pass")?.unwrap_or("".into());
+        self.set_conf(&ssid, &password)?;
         Ok(())
     }
-    pub fn is_started(&self) -> Result<bool> {
-        Ok(self.wifi.borrow().is_started()?)
+
+    pub fn has_stored(&self, storage: &StorageService) -> Result<bool> {
+        Ok(storage.get::<String>("wifi_ssid")?.is_some())
     }
-    pub async fn wait_start(&self) -> Result<()> {
-        while !self.is_started()? {
+    pub fn set_conf(&self, ssid: &str, pwd: &str) -> Result<()> {
+        let conf = Configuration::Client(ClientConfiguration {
+            ssid: ssid.into(),
+            password: pwd.into(),
+            auth_method: if pwd.is_empty() {
+                AuthMethod::None
+            } else {
+                AuthMethod::WPA2Personal
+            },
+            ..Default::default()
+        });
+        self.wifi.borrow_mut().set_configuration(&conf)?;
+        self.wifi.borrow_mut().start()?;
+        Ok(())
+    }
+
+    pub async fn connect(&self) -> Result<()> {
+        self.wifi.borrow_mut().connect()?;
+        loop {
+            if self.is_connected()? {
+                break;
+            }
             futures_timer::Delay::new(Duration::from_millis(100)).await;
         }
         Ok(())
     }
 
-    fn default_ap_conf() -> AccessPointConfiguration {
-        AccessPointConfiguration {
-            ssid: "ESP32".into(),
-            ssid_hidden: true,
-            auth_method: AuthMethod::None,
-            max_connections: 0,
-            channel: 1,
-            ..Default::default()
-        }
-    }
-    fn public_ap_conf() -> AccessPointConfiguration {
-        AccessPointConfiguration {
-            ssid: format!("ESP32-{}", get_mac().to_base58()).as_str().into(),
-            ssid_hidden: false,
-            auth_method: AuthMethod::None,
-            max_connections: 5,
-            channel: 1,
-            ..Default::default()
-        }
-    }
-    pub fn enable_ap(&self) -> Result<()> {
-        let mut wifi = self.wifi.as_ref().borrow_mut();
-        let conf = wifi.get_configuration()?;
-        let conf = match conf {
-            Configuration::None | Configuration::AccessPoint(_) => {
-                Configuration::AccessPoint(Self::public_ap_conf())
-            }
-            Configuration::Client(sta_conf) | Configuration::Mixed(sta_conf, _) => {
-                Configuration::Mixed(sta_conf, Self::public_ap_conf())
-            }
-        };
-        wifi.set_configuration(&conf)?;
-        Ok(())
-    }
-    pub fn disable_ap(&self) -> Result<()> {
-        let mut wifi = self.wifi.as_ref().borrow_mut();
-        let conf = wifi.get_configuration()?;
-        let conf = match conf {
-            Configuration::None | Configuration::AccessPoint(_) => {
-                Configuration::AccessPoint(Self::default_ap_conf())
-            }
-            Configuration::Client(sta_conf) | Configuration::Mixed(sta_conf, _) => {
-                Configuration::Mixed(sta_conf, Self::default_ap_conf())
-            }
-        };
-        wifi.set_configuration(&conf)?;
-        Ok(())
-    }
-    pub async fn connect(&self, ssid: &str, pwd: &str) -> Result<()> {
-        {
-            let mut wifi = self.wifi.borrow_mut();
-            let conf = wifi.get_configuration()?;
-            let sta_conf = ClientConfiguration {
-                ssid: ssid.into(),
-                password: pwd.into(),
-                auth_method: if pwd.is_empty() {
-                    AuthMethod::None
-                } else {
-                    AuthMethod::WPA2Personal
-                },
-                ..Default::default()
-            };
-            let conf = match conf {
-                Configuration::None | Configuration::Client(_) => Configuration::Client(sta_conf),
-                Configuration::AccessPoint(ap_conf) | Configuration::Mixed(_, ap_conf) => {
-                    Configuration::Mixed(sta_conf, ap_conf)
-                }
-            };
-            wifi.set_configuration(&conf)?;
-            wifi.start()?;
-        }
-        self.wait_start().await?;
-        self.wifi.as_ref().borrow_mut().connect()?;
-        Ok(())
-    }
-
-    pub fn disconnect(&self) -> Result<()> {
-        self.wifi.borrow_mut().disconnect()?;
-        Ok(())
-    }
     pub fn is_connected(&self) -> Result<bool> {
-        Ok(self.wifi.borrow_mut().is_connected()?)
+        Ok(self.wifi.borrow().is_connected()?)
     }
 
-    pub async fn wait_connect(&self) -> Result<()> {
+    pub async fn disconnect(&self) -> Result<()> {
+        {
+            self.wifi.borrow_mut().disconnect()?
+        }
         loop {
-            if self.is_connected()? && self.get_ip()? != Ipv4Addr::new(0, 0, 0, 0) {
+            if !self.is_connected()? {
                 break Ok(());
             }
-            futures_timer::Delay::new(Duration::from_millis(100)).await
+            futures_timer::Delay::new(Duration::from_millis(100)).await;
         }
     }
-    pub fn active_interface(&self) -> u32 {
-        esp_idf_sys::esp_interface_t_ESP_IF_WIFI_AP
-    }
 }
+
+//#[derive(Serialize, Deserialize, Debug)]
+//enum Msg {
+//    Online,
+//}
+//impl ServiceName for WifiService<'_> {
+//    type Name = &'static str;
+//
+//    fn name(&self) -> Self::Name {
+//        "wifi"
+//    }
+//}
+//
+//impl<C: Channel> Service<C> for WifiService<'_> {
+//    type Output = ();
+//
+//    async fn upgrade(&self, channel: C) -> anyhow::Result<<WifiService<'_> as Service<C>>::Output> {
+//        let mut remote_online = false;
+//
+//        let _dropper = Dropper::new(|| {
+//            *self.online_counter.borrow_mut() -= 1;
+//        });
+//
+//        let task1 = async {
+//            loop {
+//                if self.is_connected()? || *self.online_counter.borrow() > 0 {
+//                    channel.send_postcard(&Msg::Online).await?;
+//                }
+//                futures_timer::Delay::new(Duration::from_secs(4)).await;
+//            }
+//        };
+//
+//        let task2 = async {
+//            loop {
+//                while channel
+//                    .recv_postcard::<Msg>()
+//                    .timeout_secs(5)
+//                    .await
+//                    .transpose()?
+//                    .is_none()
+//                {}
+//                *self.online_counter.borrow_mut() += 1;
+//                while channel
+//                    .recv_postcard::<Msg>()
+//                    .timeout_secs(5)
+//                    .await
+//                    .transpose()?
+//                    .is_some()
+//                {}
+//                *self.online_counter.borrow_mut() -= 1;
+//            }
+//        };
+//        futures_lite::future::or(task1, task2).await
+//    }
+//}
+//
+//pub struct Dropper<F: FnOnce()> {
+//    f: F,
+//}
+//
+//impl<F: FnOnce()> Dropper<F> {
+//    pub fn new(f: F) -> Self {
+//        Self { f }
+//    }
+//}
+//impl<F: FnOnce()> Drop for Dropper<F> {
+//    fn drop(&mut self) {
+//        (self.f)()
+//    }
+//}

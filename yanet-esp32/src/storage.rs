@@ -1,13 +1,10 @@
-use std::cell::RefCell;
-
+use crate::wifi::WifiService;
 use anyhow::Result;
 use embedded_svc::storage::RawStorage;
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 use serde::{de::DeserializeOwned, Serialize};
+use std::cell::RefCell;
 use yanet_core::authenticate::PeerId;
-
-use crate::wifi::WifiService;
-
 pub struct StorageService {
     default_nvs: EspDefaultNvsPartition,
     storage: RefCell<EspNvs<NvsDefault>>,
@@ -54,9 +51,15 @@ impl StorageService {
             Ok(None)
         }
     }
+    pub fn get_str(&self, key: &str) -> Result<Option<String>> {
+        self.get(key)
+    }
     pub fn set(&self, key: &str, value: &impl Serialize) -> Result<()> {
         let buf = postcard::to_allocvec(value)?;
         self.storage.borrow_mut().set_raw(key, &buf)?;
         Ok(())
+    }
+    pub fn set_str(&self, key: &str, value: &str) -> Result<()> {
+        self.set(key, &value)
     }
 }

@@ -1,21 +1,19 @@
 #![feature(async_fn_in_trait)]
 
+use anyhow::Result;
 use snow::TransportState;
 use std::cell::RefCell;
-use std::rc::Rc;
 
 use yanet_core::{authenticate::PeerId, Authenticated, Channel, Service, ServiceName};
 
 pub struct NoiseService {
     private_key: [u8; 32],
-    shared_buf: Rc<RefCell<[u8; 10240]>>,
 }
 
 impl NoiseService {
-    pub fn new(get_key: impl Fn() -> [u8; 32]) -> Self {
+    pub fn new(get_key: impl FnOnce() -> [u8; 32]) -> Self {
         Self {
             private_key: get_key(),
-            shared_buf: Rc::new(RefCell::new([0u8; 10240])),
         }
     }
 }
@@ -29,7 +27,7 @@ impl ServiceName for NoiseService {
 
 impl<C: Channel> Service<C> for NoiseService {
     type Output = NoiseChannel<C>;
-    async fn upgrade(&self, channel: C) -> anyhow::Result<Self::Output> {
+    async fn upgrade(&self, channel: C) -> Result<Self::Output> {
         let builder = snow::Builder::new("Noise_XX_25519_ChaChaPoly_BLAKE2s".parse().unwrap())
             .local_private_key(&self.private_key);
 
@@ -59,7 +57,6 @@ impl<C: Channel> Service<C> for NoiseService {
         Ok(NoiseChannel {
             transport: RefCell::new(transport),
             channel,
-            shared_buf: self.shared_buf.clone(),
         })
     }
 }
@@ -67,7 +64,6 @@ impl<C: Channel> Service<C> for NoiseService {
 pub struct NoiseChannel<T> {
     transport: RefCell<TransportState>,
     channel: T,
-    shared_buf: Rc<RefCell<[u8; 10240]>>,
 }
 
 impl<T> Authenticated for NoiseChannel<T> {
@@ -90,25 +86,25 @@ where
     fn is_initiator(&self) -> bool {
         self.transport.borrow().is_initiator()
     }
-    async fn recv(&self) -> anyhow::Result<Vec<u8>> {
+    async fn recv(&self) -> Result<Vec<u8>> {
         let message = self
             .channel
             .recv()
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))?;
-        let mut buf = self.shared_buf.borrow_mut();
+        let mut buf = [0u8; 1024];
         let len = self
             .transport
             .borrow_mut()
-            .read_message(&message, &mut *buf)?;
+            .read_message(&message, &mut buf)?;
         Ok(buf[..len].to_owned())
     }
-    async fn send(&self, payload: &[u8]) -> anyhow::Result<()> {
-        let mut buf = self.shared_buf.borrow_mut();
+    async fn send(&self, payload: &[u8]) -> Result<()> {
+        let mut buf = [0u8; 1024];
         let len = self
             .transport
             .borrow_mut()
-            .write_message(payload, &mut *buf)?;
+            .write_message(payload, &mut buf)?;
 
         self.channel
             .send(&buf[..len])

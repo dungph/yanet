@@ -2,79 +2,61 @@
 
 pub mod device;
 pub mod espnow;
-pub mod http;
+pub mod handle_light;
+pub mod handle_push_button;
 pub mod storage;
-pub mod tcp;
-pub mod utils;
 pub mod wifi;
 
-use std::time::Duration;
-
-use crate::espnow::EspNowService;
-use crate::http::HttpServe;
 use crate::storage::StorageService;
-use crate::tcp::TcpTransport;
 use crate::wifi::WifiService;
 use async_executor::LocalExecutor;
+use device::{ledc_output::Ledc, push_button::PushButton};
 use esp_idf_hal::prelude::Peripherals;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
+use espnow::EspNowService;
+use future_utils::FutureTimeout;
+use std::time::Duration;
 use yanet_attributes::AttributesService;
 use yanet_broadcast::BroadcastService;
 use yanet_core::{ServiceName, Transport};
 use yanet_multiplex::MultiplexService;
 use yanet_noise::NoiseService;
+use yanet_tcp::TcpTransport;
 
 pub fn run() -> anyhow::Result<()> {
     esp_idf_sys::link_patches();
     let p = Peripherals::take().unwrap();
-
-    //let set_up_pin = PinDriver::input(p.pins.gpio9)?;
+    let button9 = PushButton::normal_high(p.pins.gpio9);
+    let status_led = {
+        #[cfg(not(feature = "pin13"))]
+        let ret = Ledc::new(p.pins.gpio3, p.ledc.timer0, p.ledc.channel0);
+        #[cfg(feature = "pin13")]
+        let ret = Ledc::new(p.pins.gpio13, p.ledc.timer0, p.ledc.channel0);
+        ret
+    };
 
     let storage = StorageService::new()?;
-    let wifi = WifiService::new(p.modem, &storage)?;
-
+    let eventloop = EspSystemEventLoop::take()?;
+    let wifi = WifiService::new(p.modem, eventloop.clone(), &storage)?;
     let espnow = EspNowService::new(&wifi)?;
+    let tcp = TcpTransport::new();
     let noise = NoiseService::new(|| storage.private_key(&wifi));
     let multiplex = MultiplexService::new();
-    let attributes = AttributesService::new(storage.peer_id(&wifi));
     let broadcast = BroadcastService::new();
-    let http = HttpServe::new()?;
-    let tcp = TcpTransport::new();
-
+    let attributes = AttributesService::new(storage.peer_id(&wifi));
     if let Ok(Some(vec)) = storage.get::<Vec<u8>>(attributes.name()) {
         attributes.restore(&vec).ok();
     }
 
-    #[cfg(any(feature = "light-pin13", feature = "light-pin3"))]
-    let outdev = {
-        use crate::device::OutputDevice;
-        use esp_idf_hal::{
-            ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver, Resolution},
-            units::Hertz,
-        };
-        let timer_config = TimerConfig::new()
-            .frequency(Hertz(2000))
-            .resolution(Resolution::Bits10);
-        let timer = LedcTimerDriver::new(p.ledc.timer0, &timer_config).unwrap();
-        #[cfg(feature = "light-pin13")]
-        let channel = LedcDriver::new(p.ledc.channel0, timer, p.pins.gpio13).unwrap();
-        #[cfg(feature = "light-pin3")]
-        let channel = LedcDriver::new(p.ledc.channel0, timer, p.pins.gpio3).unwrap();
-        OutputDevice::new("led", channel, p.pins.gpio9)
-    };
-
-    #[cfg(feature = "button")]
-    let button = {
-        use device::PushButton;
-        PushButton::new("push", p.pins.gpio9)
-    };
-
     let ex = LocalExecutor::new();
 
-    ex.spawn(http.run(&wifi)).detach();
     ex.spawn((&espnow).or(&tcp).then(&noise).handle(&multiplex))
         .detach();
     ex.spawn(multiplex.handle(&broadcast)).detach();
     ex.spawn(multiplex.handle(&attributes)).detach();
+    ex.spawn(tcp.connect("171.244.57.168:1234")).detach();
+    wifi.set_conf("Nokia", "12346789")?;
+    ex.spawn(wifi.connect()).detach();
 
     ex.spawn(async {
         loop {
@@ -85,21 +67,50 @@ pub fn run() -> anyhow::Result<()> {
     })
     .detach();
 
-    #[cfg(feature = "button")]
-    {
-        ex.spawn(button.run_pair_handle(&broadcast)).detach();
-        ex.spawn(button.run_push_handle(&attributes)).detach();
-    }
+    #[cfg(feature = "ledc")]
+    ex.spawn(handle_light::handle(
+        "light",
+        &button9,
+        &status_led,
+        &attributes,
+        &broadcast,
+    ))
+    .detach();
 
-    #[cfg(any(feature = "light-pin13", feature = "light-pin3"))]
-    {
-        ex.spawn(outdev.run_push_handle()).detach();
-        ex.spawn(outdev.run_pair_handle(&broadcast, &attributes))
-            .detach();
-        ex.spawn(outdev.run_listen_handle(&attributes)).detach();
-        ex.spawn(outdev.run_blink_handle()).detach();
-        ex.spawn(outdev.run_update_handle(&attributes)).detach();
-    }
+    #[cfg(feature = "button")]
+    ex.spawn(handle_push_button::handle(
+        "button",
+        &button9,
+        &attributes,
+        &broadcast,
+    ))
+    .detach();
+
+    ex.spawn(async {
+        loop {
+            button9.wait_push_min(Duration::from_secs(10)).await;
+            println!("before smartconfig {}", espnow::get_channel());
+            status_led.set_blink_period(Some(Duration::from_millis(300)));
+            match wifi.smartconfig(&storage).timeout_secs(30).await {
+                Some(Ok((ssid, pass))) => {
+                    println!("smartconfig {}", espnow::get_channel());
+                    status_led.set_blink_period(Some(Duration::from_millis(1000)));
+                    match wifi.connect().timeout_secs(10).await {
+                        Some(Ok(_)) => {
+                            println!("connect success {}", espnow::get_channel());
+                            status_led.set_blink_period(Some(Duration::from_millis(200)))
+                        }
+                        _ => {
+                            println!("connect failed {}", espnow::get_channel());
+                        }
+                    }
+                }
+                _ => {}
+            }
+            status_led.set_blink_period(None);
+        }
+    })
+    .detach();
 
     run_executor(ex);
 }
