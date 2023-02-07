@@ -36,3 +36,22 @@ and attribute_name = $2
     .await?
     .attribute_data)
 }
+
+pub async fn is_owned_by_account(username: &str, peer_id: &str, attribute: &str) -> Result<bool> {
+    Ok(query!(
+        r#"
+select attribute_name from attribute
+join link_account_peer
+on link_peer_id = attribute_peer_id
+where link_account_username = $1
+and link_peer_id = $2
+and attribute_name = $3
+            "#,
+        username,
+        peer_id,
+        attribute
+    )
+    .fetch_optional(&*DB)
+    .await?
+    .is_some())
+}

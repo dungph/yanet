@@ -1,20 +1,27 @@
 #![feature(async_fn_in_trait)]
 
 use anyhow::Result;
+use async_channel::{unbounded, Receiver, Sender};
+use log::{debug, error, info, trace, warn};
 use snow::TransportState;
 use std::cell::RefCell;
-
 use yanet_core::{authenticate::PeerId, Authenticated, Channel, Service, ServiceName};
 
 pub struct NoiseService {
     private_key: [u8; 32],
+    next_peer: (Sender<PeerId>, Receiver<PeerId>),
 }
 
 impl NoiseService {
     pub fn new(get_key: impl FnOnce() -> [u8; 32]) -> Self {
         Self {
             private_key: get_key(),
+            next_peer: unbounded(),
         }
+    }
+
+    pub async fn next_peer(&self) -> PeerId {
+        self.next_peer.1.recv().await.unwrap()
     }
 }
 
@@ -32,8 +39,10 @@ impl<C: Channel> Service<C> for NoiseService {
             .local_private_key(&self.private_key);
 
         let mut handshake = if channel.is_initiator() {
+            trace!("build initiator");
             builder.build_initiator().unwrap()
         } else {
+            trace!("build responder");
             builder.build_responder().unwrap()
         };
         let transport = {
@@ -54,6 +63,9 @@ impl<C: Channel> Service<C> for NoiseService {
                 break handshake.into_transport_mode().unwrap();
             }
         };
+
+        let pubkey: [u8; 32] = transport.get_remote_static().unwrap().try_into().unwrap();
+        self.next_peer.0.send(pubkey.into()).await?;
         Ok(NoiseChannel {
             transport: RefCell::new(transport),
             channel,

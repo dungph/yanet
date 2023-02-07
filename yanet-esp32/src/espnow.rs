@@ -5,6 +5,7 @@ use esp_idf_sys::esp_now_peer_info;
 use esp_idf_sys::esp_wifi_get_channel;
 use esp_idf_sys::esp_wifi_get_mac;
 use esp_idf_sys::esp_wifi_set_channel;
+use future_utils::FutureTimeout;
 use postcard::to_allocvec;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::AtomicBool;
@@ -88,12 +89,14 @@ impl EspNowService {
                     match data.payload {
                         Packet::Ping { is_online } => {
                             if is_online {
+                                println!("Ping online");
                                 *this2.last_online_ping.lock().unwrap() = Instant::now();
                             }
                             this2.send_pong(addr).ok();
                         }
                         Packet::Pong { is_online } => {
                             if is_online {
+                                println!("Pong online");
                                 *this2.last_online_ping.lock().unwrap() = Instant::now();
                             }
                             if handlers.contains_key(&addr) {
@@ -134,6 +137,7 @@ impl EspNowService {
         Ok(())
     }
     fn send_ping(&self) -> Result<()> {
+        println!("Send ping on channel {}", get_channel());
         self.send_packet(
             None,
             Packet::Ping {
@@ -142,6 +146,7 @@ impl EspNowService {
         )
     }
     fn send_pong(&self, addr: [u8; 6]) -> Result<()> {
+        println!("Send pong on channel {}", get_channel());
         self.send_packet(
             Some(addr),
             Packet::Pong {
@@ -178,8 +183,12 @@ impl EspNowService {
 impl Transport for EspNowService {
     type Channel = EspNowChannel;
     async fn get(&self) -> Result<Option<<EspNowService as Transport>::Channel>> {
-        self.advertise().await?;
-        Ok(Some(self.incoming.1.recv().await?))
+        loop {
+            self.advertise().await?;
+            if let Some(ret) = self.incoming.1.recv().timeout_secs(10).await.transpose()? {
+                break Ok(Some(ret));
+            }
+        }
     }
 }
 

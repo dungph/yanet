@@ -19,6 +19,8 @@ base64 = "0.21.0"
 base58 = "0.2.0"
 rand = "0.8.5"
 async-executor = "1.5.0"
+async-channel = "1.8.0"
+
 
 yanet-core = { path = "../yanet-core/"}
 yanet-tcp = { path = "../yanet-tcp/"}
@@ -26,3 +28,4 @@ yanet-noise = { path = "../yanet-noise/"}
 yanet-multiplex = { path = "../yanet-multiplex/"}
 yanet-attributes = { path = "../yanet-attributes/"}
 yanet-broadcast = { path = "../yanet-broadcast/"}
+ha-trait = { path = "../ha-trait/" }

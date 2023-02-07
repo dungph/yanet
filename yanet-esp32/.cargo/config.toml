@@ -20,8 +20,8 @@ runner = "espflash --monitor"
 
 [target.riscv32imc-esp-espidf]
 linker = "ldproxy"
-runner = "espflash flash --monitor"
-#runner = "espflash flash --monitor --baud 921600"
+#runner = "espflash flash --monitor"
+runner = "espflash flash --monitor --baud 921600"
 #runner = "espflash flash --monitor --baud 921600 --partition-table partitions.csv"
 
 # Future - necessary for the experimental "native build" of esp-idf-sys with ESP32C3
@@ -34,7 +34,7 @@ build-std = ["std", "panic_abort"]
 #build-std-features = ["panic_immediate_abort"] # Required for older ESP-IDF versions without a realpath implementation
 
 [env]
-ESP_IDF_SDKCONFIG_DEFAULTS = { value = "./sdkconfig.defaults", relative = true }
+#ESP_IDF_SDKCONFIG_DEFAULTS = { value = "./sdkconfig.defaults", relative = true }
 # Note: these variables are not used when using pio builder
 # Enables the esp-idf-sys "native" build feature (`cargo build --features native`) to build against ESP-IDF stable (v4.4)
 ESP_IDF_VERSION = { value = "branch:release/v4.4" }

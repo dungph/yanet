@@ -30,7 +30,7 @@ impl TcpTransport {
         let listener = TcpListener::bind(addr)?;
         listener.set_nonblocking(true)?;
         loop {
-            let (stream, _addr) = listener.accept()?;
+            let (stream, _addr) = dbg!(try_async(|| listener.accept()).await)?;
             stream.set_nonblocking(true)?;
             self.incoming.0.send((false, stream)).await?;
         }
@@ -42,6 +42,7 @@ impl Transport for TcpTransport {
 
     async fn get(&self) -> anyhow::Result<Option<Self::Channel>> {
         let (is_initiator, socket) = self.incoming.1.recv().await?;
+        println!("new tcp");
         Ok(Some(TcpChannel {
             is_initiator,
             socket: RefCell::new(socket),
@@ -76,7 +77,7 @@ impl Channel for TcpChannel {
         })
         .await?;
         try_async(|| self.socket.borrow_mut().write_all(buf)).await?;
-        todo!()
+        Ok(())
     }
 }
 

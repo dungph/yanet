@@ -1155,6 +1155,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ha-trait"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "hash32"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2819,10 +2826,12 @@ dependencies = [
  "anyhow",
  "async-broadcast",
  "async-channel",
+ "base64 0.21.0",
  "event-listener",
  "futures-lite",
  "postcard",
  "serde",
+ "serde_json",
  "yanet-core",
 ]
 
@@ -2834,6 +2843,7 @@ dependencies = [
  "async-channel",
  "event-listener",
  "futures-lite",
+ "futures-timer",
  "postcard",
  "serde",
  "yanet-core",
@@ -2847,6 +2857,7 @@ dependencies = [
  "async-executor",
  "base58",
  "futures-lite",
+ "log",
  "postcard",
  "serde",
 ]
@@ -2869,6 +2880,8 @@ name = "yanet-noise"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "log",
  "snow",
  "yanet-core",
 ]
@@ -2879,11 +2892,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
+ "async-channel",
  "async-executor",
  "async-std",
  "base58",
  "base64 0.21.0",
  "dotenv",
+ "ha-trait",
  "once_cell",
  "rand 0.8.5",
  "serde",

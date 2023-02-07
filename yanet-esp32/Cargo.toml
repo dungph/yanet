@@ -27,6 +27,7 @@ yanet-noise = { path = "../yanet-noise/" }
 yanet-attributes = { path = "../yanet-attributes" }
 yanet-broadcast = { path = "../yanet-broadcast/" }
 yanet-tcp = { path = "../yanet-tcp/" }
+ha-trait = { path = "../ha-trait/" }
 future-utils = { path = "../future-utils/" }
 
 embedded-hal = { version = "1.0.0-alpha.9" }
@@ -58,6 +59,7 @@ http = { version = "0.2.8" }
 base58 = { version = "0.2.0" }
 event-listener = { version = "2.5.3" }
 rand = "0.8.5"
+qrcode = { version = "0.12.0", default-features = false }
 
 [build-dependencies]
 embuild = "0.31"

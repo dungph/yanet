@@ -11,6 +11,14 @@ impl PeerId {
     }
 }
 
+impl<'a> TryFrom<&'a [u8]> for PeerId {
+    type Error = <[u8; 32] as TryFrom<&'a [u8]>>::Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let a: [u8; 32] = TryFrom::try_from(value)?;
+        Ok(Self::from(a))
+    }
+}
 impl From<[u8; 32]> for PeerId {
     fn from(value: [u8; 32]) -> Self {
         Self(value)

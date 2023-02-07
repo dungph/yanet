@@ -35,6 +35,11 @@ pub fn run() -> anyhow::Result<()> {
         ret
     };
 
+    let button0 = PushButton::normal_low(p.pins.gpio0);
+    let button1 = PushButton::normal_low(p.pins.gpio1);
+    let button6 = PushButton::normal_low(p.pins.gpio6);
+    let button7 = PushButton::normal_low(p.pins.gpio7);
+
     let storage = StorageService::new()?;
     let eventloop = EspSystemEventLoop::take()?;
     let wifi = WifiService::new(p.modem, eventloop.clone(), &storage)?;
@@ -54,9 +59,13 @@ pub fn run() -> anyhow::Result<()> {
         .detach();
     ex.spawn(multiplex.handle(&broadcast)).detach();
     ex.spawn(multiplex.handle(&attributes)).detach();
-    ex.spawn(tcp.connect("171.244.57.168:1234")).detach();
-    wifi.set_conf("Nokia", "12346789")?;
-    ex.spawn(wifi.connect()).detach();
+    ex.spawn(async {
+        dbg!(wifi.set_conf("Nokia", "12346789"));
+        dbg!(wifi.connect().await);
+        futures_timer::Delay::new(Duration::from_secs(1)).await;
+        dbg!(tcp.connect("192.168.140.23:1234").await);
+    })
+    .detach();
 
     ex.spawn(async {
         loop {
@@ -68,7 +77,7 @@ pub fn run() -> anyhow::Result<()> {
     .detach();
 
     #[cfg(feature = "ledc")]
-    ex.spawn(handle_light::handle(
+    ex.spawn(handle_light::ledc_handle(
         "light",
         &button9,
         &status_led,
@@ -78,13 +87,36 @@ pub fn run() -> anyhow::Result<()> {
     .detach();
 
     #[cfg(feature = "button")]
-    ex.spawn(handle_push_button::handle(
-        "button",
-        &button9,
-        &attributes,
-        &broadcast,
-    ))
-    .detach();
+    {
+        ex.spawn(handle_push_button::handle(
+            "button0",
+            &button0,
+            &attributes,
+            &broadcast,
+        ))
+        .detach();
+        ex.spawn(handle_push_button::handle(
+            "button1",
+            &button1,
+            &attributes,
+            &broadcast,
+        ))
+        .detach();
+        ex.spawn(handle_push_button::handle(
+            "button2",
+            &button6,
+            &attributes,
+            &broadcast,
+        ))
+        .detach();
+        ex.spawn(handle_push_button::handle(
+            "button3",
+            &button7,
+            &attributes,
+            &broadcast,
+        ))
+        .detach();
+    }
 
     ex.spawn(async {
         loop {
@@ -112,6 +144,19 @@ pub fn run() -> anyhow::Result<()> {
     })
     .detach();
 
+    ex.spawn(async {
+        use qrcode::render::unicode;
+        use qrcode::QrCode;
+        futures_timer::Delay::new(Duration::from_secs(5)).await;
+        let code = QrCode::new(format!("{}:{}", storage.peer_id(&wifi), "Hello")).unwrap();
+        let image = code
+            .render::<unicode::Dense1x2>()
+            .dark_color(unicode::Dense1x2::Light)
+            .light_color(unicode::Dense1x2::Dark)
+            .build();
+        println!("{}", image);
+    })
+    .detach();
     run_executor(ex);
 }
 

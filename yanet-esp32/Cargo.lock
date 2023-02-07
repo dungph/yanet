@@ -203,6 +203,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
 
 [[package]]
+name = "base64"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4a4ddaa51a5bc52a6948f74c06d20aaaddb71924eab79b8c97a8c556e942d6a"
+
+[[package]]
 name = "bindgen"
 version = "0.63.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -376,6 +382,12 @@ dependencies = [
  "poly1305",
  "zeroize",
 ]
+
+[[package]]
+name = "checked_int_cast"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17cc5e6b5ab06331c33589842070416baa137e8b0eb912b008cfd4a78ada7919"
 
 [[package]]
 name = "chrono"
@@ -1190,6 +1202,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ha-trait"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "hash32"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1694,6 +1713,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57a8eca9f9c4ffde41714334dee777596264c7825420f521abc92b5b5deb63a5"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "qrcode"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16d2f1455f3630c6e5107b4f2b94e74d76dea80736de0981fd27644216cff57f"
+dependencies = [
+ "checked_int_cast",
 ]
 
 [[package]]
@@ -2278,7 +2306,7 @@ version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "733b5ad78377302af52c0dbcb2623d78fe50e4b3bf215948ff29e9ee031d8566"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "flate2",
  "log",
  "once_cell",
@@ -2540,10 +2568,12 @@ dependencies = [
  "anyhow",
  "async-broadcast",
  "async-channel",
+ "base64 0.21.0",
  "event-listener",
  "futures-lite",
  "postcard",
  "serde",
+ "serde_json",
  "yanet-core",
 ]
 
@@ -2555,6 +2585,7 @@ dependencies = [
  "async-channel",
  "event-listener",
  "futures-lite",
+ "futures-timer",
  "postcard",
  "serde",
  "yanet-core",
@@ -2568,6 +2599,7 @@ dependencies = [
  "async-executor",
  "base58",
  "futures-lite",
+ "log",
  "postcard",
  "serde",
 ]
@@ -2593,11 +2625,13 @@ dependencies = [
  "future-utils",
  "futures-lite",
  "futures-timer",
+ "ha-trait",
  "http",
  "httparse",
  "minicbor",
  "once_cell",
  "postcard",
+ "qrcode",
  "rand",
  "serde",
  "serde_json",
@@ -2632,6 +2666,8 @@ name = "yanet-noise"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "log",
  "snow",
  "yanet-core",
 ]

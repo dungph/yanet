@@ -37,18 +37,18 @@ pub async fn device_data(mut req: Request<()>) -> Result {
     struct AccountInfo {
         username: String,
         password: String,
-        peerid: String,
+        peer_id: String,
         device_name: String,
     }
     if let Ok(AccountInfo {
         username,
         password,
-        peerid,
+        peer_id,
         device_name,
     }) = req.body_json().await
     {
         match valid_password(&username, &password).await {
-            Ok(true) => match database::device::get_device(&peerid, &device_name).await {
+            Ok(true) => match database::device::get_device(&peer_id, &device_name).await {
                 Ok(list) => ApiResult::success("Success", list).into(),
                 Err(e) => ApiResult::failure(e, ()).into(),
             },
