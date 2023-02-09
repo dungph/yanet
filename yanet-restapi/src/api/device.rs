@@ -32,6 +32,38 @@ pub async fn all_device(mut req: Request<()>) -> Result {
     }
 }
 
+pub async fn set_device_name(mut req: Request<()>) -> Result {
+    #[derive(Deserialize)]
+    struct AccountInfo {
+        username: String,
+        password: String,
+        peer_id: String,
+        device_name: String,
+        device_title: String,
+    }
+    if let Ok(AccountInfo {
+        username,
+        password,
+        peer_id,
+        device_name,
+        device_title,
+    }) = req.body_json().await
+    {
+        match valid_password(&username, &password).await {
+            Ok(true) => {
+                match database::device::set_name(&peer_id, &device_name, &device_title).await {
+                    Ok(_) => ApiResult::success("Success", ()).into(),
+                    Err(e) => ApiResult::failure(e, ()).into(),
+                }
+            }
+            Ok(false) => ApiResult::failure("Password not correct", ()).into(),
+            Err(e) => ApiResult::failure(e, ()).into(),
+        }
+    } else {
+        ApiResult::failure("Invalid Input", ()).into()
+    }
+}
+
 pub async fn device_data(mut req: Request<()>) -> Result {
     #[derive(Deserialize)]
     struct AccountInfo {

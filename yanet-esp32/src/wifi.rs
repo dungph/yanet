@@ -10,6 +10,7 @@ use esp_idf_svc::{
 use esp_idf_sys::{smartconfig_event_got_ssid_pswd_t, smartconfig_event_t_SC_EVENT_GOT_SSID_PSWD};
 use std::{
     cell::RefCell,
+    net::Ipv4Addr,
     sync::{
         atomic::{AtomicBool, Ordering::Relaxed},
         Arc,
@@ -129,10 +130,13 @@ impl<'a> WifiService<'a> {
     pub async fn connect(&self) -> Result<()> {
         self.wifi.borrow_mut().connect()?;
         loop {
-            if self.is_connected()? {
+            if self.is_connected()?
+                && self.wifi.borrow().sta_netif().get_ip_info().unwrap().ip
+                    != Ipv4Addr::new(0, 0, 0, 0)
+            {
                 break;
             }
-            futures_timer::Delay::new(Duration::from_millis(100)).await;
+            futures_timer::Delay::new(Duration::from_millis(300)).await;
         }
         Ok(())
     }
@@ -141,85 +145,16 @@ impl<'a> WifiService<'a> {
         Ok(self.wifi.borrow().is_connected()?)
     }
 
-    pub async fn disconnect(&self) -> Result<()> {
-        {
-            self.wifi.borrow_mut().disconnect()?
-        }
+    pub fn disconnect(&self) -> Result<()> {
+        self.wifi.borrow_mut().disconnect()?;
+        Ok(())
+    }
+    pub async fn wait_disconnect(&self) -> Result<()> {
         loop {
             if !self.is_connected()? {
                 break Ok(());
             }
-            futures_timer::Delay::new(Duration::from_millis(100)).await;
+            futures_timer::Delay::new(Duration::from_millis(300)).await;
         }
     }
 }
-
-//#[derive(Serialize, Deserialize, Debug)]
-//enum Msg {
-//    Online,
-//}
-//impl ServiceName for WifiService<'_> {
-//    type Name = &'static str;
-//
-//    fn name(&self) -> Self::Name {
-//        "wifi"
-//    }
-//}
-//
-//impl<C: Channel> Service<C> for WifiService<'_> {
-//    type Output = ();
-//
-//    async fn upgrade(&self, channel: C) -> anyhow::Result<<WifiService<'_> as Service<C>>::Output> {
-//        let mut remote_online = false;
-//
-//        let _dropper = Dropper::new(|| {
-//            *self.online_counter.borrow_mut() -= 1;
-//        });
-//
-//        let task1 = async {
-//            loop {
-//                if self.is_connected()? || *self.online_counter.borrow() > 0 {
-//                    channel.send_postcard(&Msg::Online).await?;
-//                }
-//                futures_timer::Delay::new(Duration::from_secs(4)).await;
-//            }
-//        };
-//
-//        let task2 = async {
-//            loop {
-//                while channel
-//                    .recv_postcard::<Msg>()
-//                    .timeout_secs(5)
-//                    .await
-//                    .transpose()?
-//                    .is_none()
-//                {}
-//                *self.online_counter.borrow_mut() += 1;
-//                while channel
-//                    .recv_postcard::<Msg>()
-//                    .timeout_secs(5)
-//                    .await
-//                    .transpose()?
-//                    .is_some()
-//                {}
-//                *self.online_counter.borrow_mut() -= 1;
-//            }
-//        };
-//        futures_lite::future::or(task1, task2).await
-//    }
-//}
-//
-//pub struct Dropper<F: FnOnce()> {
-//    f: F,
-//}
-//
-//impl<F: FnOnce()> Dropper<F> {
-//    pub fn new(f: F) -> Self {
-//        Self { f }
-//    }
-//}
-//impl<F: FnOnce()> Drop for Dropper<F> {
-//    fn drop(&mut self) {
-//        (self.f)()
-//    }
-//}

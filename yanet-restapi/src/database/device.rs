@@ -19,6 +19,22 @@ on conflict (device_peer_id, device_name) do nothing
     Ok(())
 }
 
+pub async fn set_name(peer_id: &str, device_name: &str, new_name: &str) -> Result<()> {
+    query!(
+        r#"
+update device 
+set device_title = $3
+where device_peer_id = $1
+and device_name = $2
+        "#,
+        peer_id,
+        device_name,
+        new_name
+    )
+    .execute(&*DB)
+    .await?;
+    Ok(())
+}
 pub async fn get_device(peer_id: &str, device: &str) -> Result<Value> {
     Ok(query!(
         r#"

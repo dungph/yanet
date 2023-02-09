@@ -62,6 +62,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-channel"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf46fee83e5ccffc220104713af3292ff9bc7c64c7de289f66dae8e38d826833"
+dependencies = [
+ "concurrent-queue",
+ "event-listener",
+ "futures-core",
+]
+
+[[package]]
 name = "async-executor"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -302,6 +313,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a214f5bb88731d436478f3ae1f8a277b62124089ba9fb67f4f93fb100ef73c90"
 
 [[package]]
+name = "future-utils"
+version = "0.0.0"
+dependencies = [
+ "futures-lite",
+ "futures-timer",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -327,6 +346,12 @@ dependencies = [
  "pin-project-lite",
  "waker-fn",
 ]
+
+[[package]]
+name = "futures-timer"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e64b03909df88034c26dc1547e8970b91f98bdb65165d6a4e9110d94263dbb2c"
 
 [[package]]
 name = "generic-array"
@@ -521,6 +546,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ppv-lite86"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b40af805b3121feab8a3c29f04d8ad262fa8e0561883e7653e024ae4479e6de"
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -536,6 +567,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8856d8364d252a14d474036ea1358d63c9e6965c8e5c1885c18f73d70bff9c7b"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "rand"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
+dependencies = [
+ "libc",
+ "rand_chacha",
+ "rand_core",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
+dependencies = [
+ "ppv-lite86",
+ "rand_core",
 ]
 
 [[package]]
@@ -709,6 +761,7 @@ dependencies = [
  "anyhow",
  "async-executor",
  "base58",
+ "future-utils",
  "futures-lite",
  "log",
  "postcard",
@@ -720,7 +773,10 @@ name = "yanet-noise"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "futures-timer",
  "log",
+ "rand",
  "snow",
  "yanet-core",
 ]

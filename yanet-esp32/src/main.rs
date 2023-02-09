@@ -43,6 +43,7 @@ pub fn run() -> anyhow::Result<()> {
     let storage = StorageService::new()?;
     let eventloop = EspSystemEventLoop::take()?;
     let wifi = WifiService::new(p.modem, eventloop.clone(), &storage)?;
+    wifi.set_conf("Nokia", "12346789")?;
     let espnow = EspNowService::new(&wifi)?;
     let tcp = TcpTransport::new();
     let noise = NoiseService::new(|| storage.private_key(&wifi));
@@ -55,15 +56,35 @@ pub fn run() -> anyhow::Result<()> {
 
     let ex = LocalExecutor::new();
 
-    ex.spawn((&espnow).or(&tcp).then(&noise).handle(&multiplex))
-        .detach();
+    ex.spawn(
+        (&tcp)
+            //.or(&tcp)
+            .or(&espnow)
+            .then(&noise)
+            .handle(&multiplex),
+    )
+    .detach();
     ex.spawn(multiplex.handle(&broadcast)).detach();
     ex.spawn(multiplex.handle(&attributes)).detach();
+    //ex.spawn(async {
+    //    loop {
+    //        espnow.advertise().await.unwrap();
+    //        futures_timer::Delay::new(Duration::from_secs(5)).await;
+    //    }
+    //})
+    //.detach();
     ex.spawn(async {
-        dbg!(wifi.set_conf("Nokia", "12346789"));
-        dbg!(wifi.connect().await);
-        futures_timer::Delay::new(Duration::from_secs(1)).await;
-        dbg!(tcp.connect("192.168.140.23:1234").await);
+        loop {
+            loop {
+                match dbg!(wifi.connect().timeout_secs(10).await) {
+                    Some(_) => break,
+                    None => {}
+                }
+            }
+            futures_timer::Delay::new(Duration::from_secs(3)).await;
+            dbg!(tcp.connect("192.168.241.23:1234").await);
+            wifi.wait_disconnect().await;
+        }
     })
     .detach();
 
@@ -88,6 +109,13 @@ pub fn run() -> anyhow::Result<()> {
 
     #[cfg(feature = "button")]
     {
+        ex.spawn(handle_push_button::handle(
+            "button9",
+            &button9,
+            &attributes,
+            &broadcast,
+        ))
+        .detach();
         ex.spawn(handle_push_button::handle(
             "button0",
             &button0,
@@ -121,20 +149,15 @@ pub fn run() -> anyhow::Result<()> {
     ex.spawn(async {
         loop {
             button9.wait_push_min(Duration::from_secs(10)).await;
-            println!("before smartconfig {}", espnow::get_channel());
             status_led.set_blink_period(Some(Duration::from_millis(300)));
             match wifi.smartconfig(&storage).timeout_secs(30).await {
                 Some(Ok((ssid, pass))) => {
-                    println!("smartconfig {}", espnow::get_channel());
                     status_led.set_blink_period(Some(Duration::from_millis(1000)));
                     match wifi.connect().timeout_secs(10).await {
                         Some(Ok(_)) => {
-                            println!("connect success {}", espnow::get_channel());
                             status_led.set_blink_period(Some(Duration::from_millis(200)))
                         }
-                        _ => {
-                            println!("connect failed {}", espnow::get_channel());
-                        }
+                        _ => {}
                     }
                 }
                 _ => {}
@@ -144,19 +167,19 @@ pub fn run() -> anyhow::Result<()> {
     })
     .detach();
 
-    ex.spawn(async {
-        use qrcode::render::unicode;
-        use qrcode::QrCode;
-        futures_timer::Delay::new(Duration::from_secs(5)).await;
-        let code = QrCode::new(format!("{}:{}", storage.peer_id(&wifi), "Hello")).unwrap();
-        let image = code
-            .render::<unicode::Dense1x2>()
-            .dark_color(unicode::Dense1x2::Light)
-            .light_color(unicode::Dense1x2::Dark)
-            .build();
-        println!("{}", image);
-    })
-    .detach();
+    //ex.spawn(async {
+    //    use qrcode::render::unicode;
+    //    use qrcode::QrCode;
+    //    futures_timer::Delay::new(Duration::from_secs(5)).await;
+    //    let code = QrCode::new(format!("{}:{}", storage.peer_id(&wifi), "Hello")).unwrap();
+    //    let image = code
+    //        .render::<unicode::Dense1x2>()
+    //        .dark_color(unicode::Dense1x2::Light)
+    //        .light_color(unicode::Dense1x2::Dark)
+    //        .build();
+    //    println!("{}", image);
+    //})
+    //.detach();
     run_executor(ex);
 }
 

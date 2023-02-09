@@ -2598,6 +2598,7 @@ dependencies = [
  "anyhow",
  "async-executor",
  "base58",
+ "future-utils",
  "futures-lite",
  "log",
  "postcard",
@@ -2667,7 +2668,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "futures-timer",
  "log",
+ "rand",
  "snow",
  "yanet-core",
 ]

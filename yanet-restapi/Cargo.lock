@@ -982,6 +982,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "future-utils"
+version = "0.0.0"
+dependencies = [
+ "futures-lite",
+ "futures-timer",
+]
+
+[[package]]
 name = "futures-channel"
 version = "0.3.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2856,6 +2864,7 @@ dependencies = [
  "anyhow",
  "async-executor",
  "base58",
+ "future-utils",
  "futures-lite",
  "log",
  "postcard",

@@ -1,5 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
+use future_utils::FutureTimeout;
+
 use crate::{Either, Or};
 
 use super::{channel::Channel, service::Service};
@@ -31,7 +33,9 @@ pub trait Transport: Sized {
         let ex = async_executor::LocalExecutor::new();
         let task = async {
             loop {
+                println!("begin get new generic channel ");
                 let ch = self.get().await?;
+                println!("get new generic channel ");
                 match ch {
                     Some(ch) => {
                         ex.spawn(upgrader.upgrade(ch)).detach();
@@ -111,7 +115,13 @@ where
 
     async fn get(&self) -> anyhow::Result<Option<<Then<A, B> as Transport>::Channel>> {
         if let Some(channel) = self.channel.get().await? {
-            Ok(Some(self.service.upgrade(channel).await?))
+            Ok(Some(
+                self.service
+                    .upgrade(channel)
+                    //.timeout_secs(1)
+                    .await //.ok_or(anyhow::anyhow!("Timeout"))??,
+                            ?,
+            ))
         } else {
             Ok(None)
         }

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use yanet_core::{authenticate::PeerId, Authenticated, Channel, Service, ServiceName};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct InnerMessage {
     service: Vec<u8>,
     payload: Vec<u8>,
@@ -75,6 +75,7 @@ where
     async fn upgrade(&self, channel: C) -> anyhow::Result<Self::Output> {
         let is_init = channel.is_initiator();
         let remote_id = channel.peer_id();
+        println!("multiplex upgrade");
         let (out_tx, out_rx) = bounded::<InnerMessage>(10);
         let receivers: BTreeMap<Vec<u8>, Sender<Vec<u8>>> = self
             .endpoints

@@ -2,9 +2,8 @@
 
 use anyhow::Result;
 use async_channel::{unbounded, Receiver, Sender};
-use log::{debug, error, info, trace, warn};
 use snow::TransportState;
-use std::cell::RefCell;
+use std::{cell::RefCell, time::Duration};
 use yanet_core::{authenticate::PeerId, Authenticated, Channel, Service, ServiceName};
 
 pub struct NoiseService {
@@ -35,28 +34,27 @@ impl ServiceName for NoiseService {
 impl<C: Channel> Service<C> for NoiseService {
     type Output = NoiseChannel<C>;
     async fn upgrade(&self, channel: C) -> Result<Self::Output> {
-        let builder = snow::Builder::new("Noise_XX_25519_ChaChaPoly_BLAKE2s".parse().unwrap())
+        println!("begin handshake");
+        futures_timer::Delay::new(Duration::from_millis(rand::random::<u64>() % 333)).await;
+        let builder = snow::Builder::new("Noise_IX_25519_ChaChaPoly_BLAKE2s".parse().unwrap())
             .local_private_key(&self.private_key);
 
         let mut handshake = if channel.is_initiator() {
-            trace!("build initiator");
             builder.build_initiator().unwrap()
         } else {
-            trace!("build responder");
             builder.build_responder().unwrap()
         };
         let transport = {
             loop {
-                let mut buf = [0u8; 128];
+                let mut buf = [0u8; 192];
                 while !handshake.is_handshake_finished() {
                     if handshake.is_my_turn() {
                         let len = handshake.write_message(&[], &mut buf)?;
-                        channel
-                            .send(&buf[..len])
-                            .await
+                        dbg!(channel.send(&buf[..len]).await)
                             .map_err(|e| anyhow::anyhow!("{}", e))?;
                     } else {
-                        let msg = channel.recv().await.map_err(|e| anyhow::anyhow!("{}", e))?;
+                        let msg =
+                            dbg!(channel.recv().await).map_err(|e| anyhow::anyhow!("{}", e))?;
                         handshake.read_message(&msg, &mut buf)?;
                     }
                 }
@@ -66,6 +64,7 @@ impl<C: Channel> Service<C> for NoiseService {
 
         let pubkey: [u8; 32] = transport.get_remote_static().unwrap().try_into().unwrap();
         self.next_peer.0.send(pubkey.into()).await?;
+        println!("end handshake");
         Ok(NoiseChannel {
             transport: RefCell::new(transport),
             channel,
