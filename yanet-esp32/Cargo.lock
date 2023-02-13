@@ -1403,6 +1403,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "local-ex"
+version = "0.1.0"
+dependencies = [
+ "async-executor",
+ "futures-lite",
+ "waker-fn",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2628,6 +2637,7 @@ dependencies = [
  "ha-trait",
  "http",
  "httparse",
+ "local-ex",
  "minicbor",
  "once_cell",
  "postcard",
@@ -2667,7 +2677,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "futures-lite",
+ "local-ex",
  "log",
+ "serde",
  "snow",
  "yanet-core",
 ]

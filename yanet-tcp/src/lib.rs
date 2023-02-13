@@ -63,8 +63,8 @@ impl Channel for TcpChannel {
         let mut buf = [0u8; 1024];
         try_async(|| self.socket.borrow_mut().read_exact(&mut buf[..2])).await?;
         let len = u16::from_be_bytes(buf[..2].try_into().unwrap()) as usize;
-
         try_async(|| self.socket.borrow_mut().read_exact(&mut buf[..len])).await?;
+
         Ok(buf[..len].to_owned())
     }
 

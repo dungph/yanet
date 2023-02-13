@@ -62,6 +62,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-channel"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf46fee83e5ccffc220104713af3292ff9bc7c64c7de289f66dae8e38d826833"
+dependencies = [
+ "concurrent-queue",
+ "event-listener",
+ "futures-core",
+]
+
+[[package]]
 name = "async-executor"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -410,6 +421,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7fc7aa29613bd6a620df431842069224d8bc9011086b1db4c0e0cd47fa03ec9a"
 
 [[package]]
+name = "local-ex"
+version = "0.1.0"
+dependencies = [
+ "async-executor",
+ "futures-lite",
+ "waker-fn",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -720,7 +740,11 @@ name = "yanet-noise"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "futures-lite",
+ "local-ex",
  "log",
+ "serde",
  "snow",
  "yanet-core",
 ]

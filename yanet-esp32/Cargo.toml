@@ -29,6 +29,7 @@ yanet-broadcast = { path = "../yanet-broadcast/" }
 yanet-tcp = { path = "../yanet-tcp/" }
 ha-trait = { path = "../ha-trait/" }
 future-utils = { path = "../future-utils/" }
+local-ex = { path = "../local-ex" }
 
 embedded-hal = { version = "1.0.0-alpha.9" }
 #embedded-hal-02 = { version = "0.2.7", package = "embedded-hal" }

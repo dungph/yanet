@@ -1,0 +1,16 @@
+[package]
+name = "yanet-noise"
+version = "0.0.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+yanet-core = { path = "../yanet-core/" }
+snow = { version = "0.9.0" }
+anyhow = { version = "1" }
+log = { version = "0.4" }
+async-channel = { version = "1.8" }
+serde = {version="1", features=["derive"]}
+local-ex = { path = "../local-ex/" }
+futures-lite = { version = "1.12.0" }

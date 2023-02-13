@@ -29,3 +29,4 @@ yanet-multiplex = { path = "../yanet-multiplex/"}
 yanet-attributes = { path = "../yanet-attributes/"}
 yanet-broadcast = { path = "../yanet-broadcast/"}
 ha-trait = { path = "../ha-trait/" }
+local-ex = { path = "../local-ex/" }

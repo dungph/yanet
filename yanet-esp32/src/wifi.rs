@@ -3,24 +3,17 @@ use anyhow::Result;
 use async_channel::bounded;
 use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration, Wifi};
 use esp_idf_hal::modem::Modem;
-use esp_idf_svc::{
-    eventloop::EspSystemEventLoop,
-    wifi::{EspWifi, WifiEvent},
-};
+use esp_idf_svc::{eventloop::EspSystemEventLoop, wifi::EspWifi};
 use esp_idf_sys::{smartconfig_event_got_ssid_pswd_t, smartconfig_event_t_SC_EVENT_GOT_SSID_PSWD};
 use std::{
     cell::RefCell,
-    sync::{
-        atomic::{AtomicBool, Ordering::Relaxed},
-        Arc,
-    },
-    time::Duration,
+    net::Ipv4Addr,
+    time::{Duration, Instant},
 };
 
 pub struct WifiService<'a> {
     wifi: RefCell<EspWifi<'a>>,
     eventloop: EspSystemEventLoop,
-    pub(crate) is_connected: Arc<AtomicBool>,
 }
 
 impl<'a> WifiService<'a> {
@@ -34,20 +27,10 @@ impl<'a> WifiService<'a> {
         unsafe {
             esp_idf_sys::esp_wifi_set_channel(11, 0);
         }
-        let is_connected = Arc::new(AtomicBool::new(false));
-        let is_connected2 = is_connected.clone();
-
         let this = Self {
             wifi: RefCell::new(wifi),
             eventloop: eventloop.clone(),
-            is_connected,
         };
-
-        std::mem::forget(eventloop.subscribe(move |event: &WifiEvent| match event {
-            WifiEvent::StaConnected => is_connected2.store(true, Relaxed),
-            WifiEvent::StaDisconnected => is_connected2.store(true, Relaxed),
-            _ => {}
-        }));
 
         this.set_conf_stored(storage)?;
         Ok(this)
@@ -126,10 +109,17 @@ impl<'a> WifiService<'a> {
         Ok(())
     }
 
-    pub async fn connect(&self) -> Result<()> {
+    pub async fn connect(&self, retry: Duration) -> Result<()> {
+        let mut start = Instant::now();
         self.wifi.borrow_mut().connect()?;
         loop {
-            if self.is_connected()? {
+            if start.elapsed() >= retry {
+                start = Instant::now();
+                self.wifi.borrow_mut().connect();
+            }
+            if self.is_connected()?
+                && self.wifi.borrow().sta_netif().get_ip_info()?.ip != Ipv4Addr::new(0, 0, 0, 0)
+            {
                 break;
             }
             futures_timer::Delay::new(Duration::from_millis(100)).await;
@@ -142,9 +132,11 @@ impl<'a> WifiService<'a> {
     }
 
     pub async fn disconnect(&self) -> Result<()> {
-        {
-            self.wifi.borrow_mut().disconnect()?
-        }
+        self.wifi.borrow_mut().disconnect()?;
+        Ok(())
+    }
+
+    pub(crate) async fn wait_disconnect(&self) -> Result<()> {
         loop {
             if !self.is_connected()? {
                 break Ok(());

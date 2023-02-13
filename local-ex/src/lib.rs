@@ -5,37 +5,35 @@ use std::{
 
 use async_executor::{LocalExecutor, Task};
 
-pub struct LocalEx;
-impl LocalEx {
-    thread_local!(static EX: LocalExecutor<'static> = LocalExecutor::new());
-    pub fn spawn<T: 'static>(fut: impl Future<Output = T> + 'static) -> Task<T> {
-        Self::EX.with(|e| e.spawn(fut))
-    }
+thread_local!(static EX: LocalExecutor<'static> = LocalExecutor::new());
 
-    pub fn run<F: Future>(task: F) -> F::Output {
-        Self::EX.with(|ex| {
-            futures_lite::pin!(task);
+pub fn spawn<T: 'static>(fut: impl Future<Output = T> + 'static) -> Task<T> {
+    EX.with(|e| e.spawn(fut))
+}
 
-            let this = std::thread::current();
-            let waker = waker_fn::waker_fn(move || {
-                this.unpark();
-            });
-            let mut cx = Context::from_waker(&waker);
+pub fn run<F: Future>(task: F) -> F::Output {
+    EX.with(|ex| {
+        futures_lite::pin!(task);
 
-            loop {
-                if let Poll::Ready(r) = task.as_mut().poll(&mut cx) {
-                    return r;
-                }
-                while ex.try_tick() {}
+        let this = std::thread::current();
+        let waker = waker_fn::waker_fn(move || {
+            this.unpark();
+        });
+        let mut cx = Context::from_waker(&waker);
 
-                let fut = ex.tick();
-                futures_lite::pin!(fut);
-
-                match fut.poll(&mut cx) {
-                    Poll::Ready(_) => (),
-                    Poll::Pending => std::thread::park(),
-                }
+        loop {
+            if let Poll::Ready(r) = task.as_mut().poll(&mut cx) {
+                return r;
             }
-        })
-    }
+            while ex.try_tick() {}
+
+            let fut = ex.tick();
+            futures_lite::pin!(fut);
+
+            match fut.poll(&mut cx) {
+                Poll::Ready(_) => (),
+                Poll::Pending => std::thread::park(),
+            }
+        }
+    })
 }

@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
         .at("/api/attribute/data/new")
         .post(api::attribute::set_attribute);
 
-    async_std::task::spawn_local(async {
+    std::thread::spawn(|| {
         let key = rand::random::<[u8; 32]>();
         let tcp = TcpTransport::new();
         let noise = NoiseService::new(|| key);
@@ -86,7 +86,6 @@ async fn main() -> anyhow::Result<()> {
         ex.spawn(tcp.listen("0.0.0.0:1234")).detach();
         ex.spawn(async {
             loop {
-                println!("Recv\n\n\n\n");
                 let (peerid, key, value) = api::attribute::wait_req().await;
                 attributes
                     .request_set_attr(&peerid, &key, value.into())
@@ -95,9 +94,12 @@ async fn main() -> anyhow::Result<()> {
         })
         .detach();
         //ex.spawn()
-        loop {
-            ex.tick().await
-        }
+
+        local_ex::run(async {
+            loop {
+                ex.tick().await
+            }
+        });
     });
 
     server.listen("0.0.0.0:8080").await?;

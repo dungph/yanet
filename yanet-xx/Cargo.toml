@@ -11,3 +11,6 @@ snow = { version = "0.9.0" }
 anyhow = { version = "1" }
 log = { version = "0.4" }
 async-channel = { version = "1.8" }
+serde = {version="1", features=["derive"]}
+local-ex = { path = "../local-ex/" }
+futures-lite = { version = "1.12.0" }
