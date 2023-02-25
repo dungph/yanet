@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "yanet-core",
+    "yanet-udp",
+    "yanet-noise",
+    "yanet-muxer",
+    "yanet-relay"
+]

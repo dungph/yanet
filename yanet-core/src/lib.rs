@@ -1,22 +1,17 @@
+#![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
+#![no_std]
 
-pub mod authenticate;
-pub mod channel;
-pub mod service;
-pub mod transport;
+pub mod socket;
+pub use socket::Socket;
 
-pub use authenticate::Authenticated;
-pub use authenticate::PeerId;
-pub use channel::Channel;
-pub use service::{Service, ServiceName};
-pub use transport::Transport;
-
-pub struct Or<A, B> {
-    a: A,
-    b: B,
+pub trait SocketUpgrade<S>: ServiceName {
+    type Output;
+    type Error;
+    async fn upgrade(&self, socket: S) -> Result<Self::Output, Self::Error>;
 }
 
-pub enum Either<A, B> {
-    A(A),
-    B(B),
+pub trait ServiceName {
+    type Name;
+    fn name(&self) -> Self::Name;
 }
