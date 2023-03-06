@@ -4,7 +4,6 @@
 use serde::{Deserialize, Serialize};
 use snow::{HandshakeState, TransportState};
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
 };
@@ -64,7 +63,7 @@ pub enum Error<E> {
 pub struct NoiseSocket<S: Socket> {
     private_key: [u8; 32],
     socket: S,
-    sessions: RefCell<BTreeMap<S::Addr, NoiseSession>>,
+    sessions: BTreeMap<S::Addr, NoiseSession>,
 }
 
 impl<S: Socket> NoiseSocket<S> {
@@ -75,7 +74,7 @@ impl<S: Socket> NoiseSocket<S> {
             sessions: Default::default(),
         }
     }
-    pub async fn advertise(&self) -> Result<(), Error<S::Error>> {
+    pub async fn advertise(&mut self) -> Result<(), Error<S::Error>> {
         let hello = Msg::Hello;
         self.socket.broadcast(&hello).await.map_err(Error::Io)?;
         Ok(())
@@ -91,13 +90,12 @@ where
     type Addr = [u8; 32];
     type Error = Error<S::Error>;
 
-    async fn broadcast<D>(&self, data: &D) -> Result<(), Self::Error>
+    async fn broadcast<D>(&mut self, data: &D) -> Result<(), Self::Error>
     where
         D: Serialize,
     {
         let addrs: BTreeSet<[u8; 32]> = self
             .sessions
-            .borrow()
             .iter()
             .filter_map(|(_a, s)| s.get_remote_static())
             .collect();
@@ -107,13 +105,12 @@ where
         Ok(())
     }
 
-    async fn send<D>(&self, data: &D, addr: Self::Addr) -> Result<(), Self::Error>
+    async fn send<D>(&mut self, data: &D, addr: Self::Addr) -> Result<(), Self::Error>
     where
         D: Serialize + ?Sized,
     {
         let ret = self
             .sessions
-            .borrow_mut()
             .iter_mut()
             .find_map(|(_a, s)| match s {
                 NoiseSession::Transport(t) if t.get_remote_static() == Some(addr.as_slice()) => {
@@ -137,7 +134,7 @@ where
         Ok(())
     }
 
-    async fn recv<D>(&self) -> Result<(D, Self::Addr), Self::Error>
+    async fn recv<D>(&mut self) -> Result<(D, Self::Addr), Self::Error>
     where
         D: serde::de::DeserializeOwned,
     {
@@ -150,9 +147,7 @@ where
             }
 
             let (msg, addr) = self.socket.recv::<Msg>().await.map_err(Error::Io)?;
-
-            let mut sessions = self.sessions.borrow_mut();
-            let entry = sessions.entry(addr.clone()).or_default();
+            let entry = self.sessions.entry(addr.clone()).or_default();
             match (core::mem::take(entry), msg) {
                 (NoiseSession::Initiating, Msg::Hello) => {
                     let mut hs = Box::new(builder(true, self.private_key));

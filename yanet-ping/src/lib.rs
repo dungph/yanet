@@ -22,18 +22,19 @@ impl ServiceName for Pinger {
 }
 impl<S> Service<S> for Pinger
 where
-    S: Socket,
+    S: Socket + Clone,
     S::Addr: std::fmt::Debug,
 {
     type Output = ();
 
     type Error = S::Error;
 
-    async fn upgrade(&self, socket: S) -> Result<Self::Output, Self::Error> {
+    async fn upgrade(&self, mut socket: S) -> Result<Self::Output, Self::Error> {
+        let mut socket1 = socket.clone();
         let task1 = async {
             loop {
                 futures_timer::Delay::new(self.dur).await;
-                socket.broadcast(&"hello").await?;
+                socket1.broadcast(&"hello").await?;
             }
         };
         let task2 = async {

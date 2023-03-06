@@ -4,15 +4,15 @@ use serde::{de::DeserializeOwned, Serialize};
 pub trait Socket: Sized {
     type Addr;
     type Error;
-    async fn broadcast<D>(&self, data: &D) -> Result<(), Self::Error>
+    async fn broadcast<D>(&mut self, data: &D) -> Result<(), Self::Error>
     where
         D: Serialize;
 
-    async fn send<D>(&self, data: &D, addr: Self::Addr) -> Result<(), Self::Error>
+    async fn send<D>(&mut self, data: &D, addr: Self::Addr) -> Result<(), Self::Error>
     where
         D: Serialize + ?Sized;
 
-    async fn recv<D>(&self) -> Result<(D, Self::Addr), Self::Error>
+    async fn recv<D>(&mut self) -> Result<(D, Self::Addr), Self::Error>
     where
         D: DeserializeOwned;
 
@@ -37,7 +37,7 @@ impl<T: Socket, O: Socket> Socket for Or<T, O> {
 
     type Error = Either<T::Error, O::Error>;
 
-    async fn broadcast<D>(&self, data: &D) -> Result<(), Self::Error>
+    async fn broadcast<D>(&mut self, data: &D) -> Result<(), Self::Error>
     where
         D: Serialize,
     {
@@ -46,7 +46,7 @@ impl<T: Socket, O: Socket> Socket for Or<T, O> {
         Ok(())
     }
 
-    async fn send<D>(&self, data: &D, addr: Self::Addr) -> Result<(), Self::Error>
+    async fn send<D>(&mut self, data: &D, addr: Self::Addr) -> Result<(), Self::Error>
     where
         D: Serialize + ?Sized,
     {
@@ -56,7 +56,7 @@ impl<T: Socket, O: Socket> Socket for Or<T, O> {
         }
     }
 
-    async fn recv<D>(&self) -> Result<(D, Self::Addr), Self::Error>
+    async fn recv<D>(&mut self) -> Result<(D, Self::Addr), Self::Error>
     where
         D: DeserializeOwned,
     {

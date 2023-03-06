@@ -1,7 +1,7 @@
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
 
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use async_channel::{bounded, Receiver, Sender};
 use dashmap::DashMap;
@@ -16,14 +16,14 @@ pub enum Error<E> {
     Serde(postcard::Error),
 }
 pub struct Muxer<S: Socket> {
-    socket: Rc<S>,
+    socket: Rc<RefCell<S>>,
     handlers: Rc<DashMap<String, Sender<(Vec<u8>, S::Addr)>>>,
 }
 
 impl<S: Socket> Muxer<S> {
     pub fn new(socket: S) -> Self {
         Self {
-            socket: Rc::new(socket),
+            socket: Rc::new(RefCell::new(socket)),
             handlers: Default::default(),
         }
     }
@@ -46,9 +46,10 @@ impl<S: Socket> Muxer<S> {
     }
 }
 
+#[derive(Clone)]
 pub struct MuxerSocket<S: Socket> {
     name: String,
-    socket: Rc<S>,
+    socket: Rc<RefCell<S>>,
     handlers: Rc<DashMap<String, Sender<(Vec<u8>, S::Addr)>>>,
     receiver: Receiver<(Vec<u8>, S::Addr)>,
 }
@@ -57,39 +58,42 @@ impl<S: Socket> Socket for MuxerSocket<S> {
     type Addr = S::Addr;
     type Error = Error<S::Error>;
 
-    async fn broadcast<D>(&self, data: &D) -> Result<(), Self::Error>
+    async fn broadcast<D>(&mut self, data: &D) -> Result<(), Self::Error>
     where
         D: Serialize,
     {
         let msg = postcard::to_allocvec(data).unwrap();
         println!("broadcasting {:?}", msg);
         self.socket
+            .borrow_mut()
             .broadcast(&(self.name.as_str(), msg))
             .await
             .map_err(Error::Socket)?;
         Ok(())
     }
-
-    async fn send<D>(&self, data: &D, addr: Self::Addr) -> Result<(), Self::Error>
+    async fn send<D>(&mut self, data: &D, addr: Self::Addr) -> Result<(), Self::Error>
     where
         D: Serialize + ?Sized,
     {
         let msg = postcard::to_allocvec(data).map_err(Error::Serde)?;
         println!("sending {:?}", msg);
         self.socket
+            .borrow_mut()
             .send(&(self.name.as_str(), msg), addr)
             .await
             .map_err(Error::Socket)?;
         Ok(())
     }
 
-    async fn recv<D>(&self) -> Result<(D, Self::Addr), Self::Error>
+    async fn recv<D>(&mut self) -> Result<(D, Self::Addr), Self::Error>
     where
         D: serde::de::DeserializeOwned,
     {
         let task1 = async {
             loop {
-                if let Ok(((name, vec), addr)) = self.socket.recv::<(String, Vec<u8>)>().await {
+                if let Ok(((name, vec), addr)) =
+                    self.socket.borrow_mut().recv::<(String, Vec<u8>)>().await
+                {
                     if let Some(sender) = self.handlers.get(&name) {
                         sender
                             .send((vec, addr))
