@@ -4,5 +4,6 @@ members = [
     "yanet-udp",
     "yanet-noise",
     "yanet-muxer",
+    "yanet-ping",
     "yanet-relay"
 ]
