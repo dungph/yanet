@@ -3,11 +3,13 @@
 
 use std::{
     cell::RefCell,
+    fmt::Debug,
     io::{self, Error, ErrorKind, Result},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket},
     time::Duration,
 };
 
+use serde::{de::DeserializeOwned, Serialize};
 use yanet_core::Socket;
 
 pub async fn try_async<T>(mut f: impl FnMut() -> Result<T>) -> Result<T> {
@@ -27,8 +29,9 @@ pub struct Udp {
 }
 
 impl Udp {
-    pub fn new<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
-        let socket = UdpSocket::bind(addr)?;
+    pub fn new<A: ToSocketAddrs + Debug>(addr: A) -> io::Result<Self> {
+        let socket = UdpSocket::bind(&addr)?;
+        socket.set_nonblocking(true)?;
         Ok(Self {
             peers: Default::default(),
             inner: socket,
@@ -51,18 +54,36 @@ impl Socket for Udp {
     type Addr = SocketAddr;
     type Error = Error;
 
-    async fn broadcast(&self, buf: &[u8]) -> std::result::Result<(), Self::Error> {
+    async fn broadcast<D>(&self, data: &D) -> std::result::Result<(), Self::Error>
+    where
+        D: Serialize,
+    {
         for addr in self.peers.borrow().clone().iter() {
-            self.send(buf, *addr).await?;
+            self.send(&data, *addr).await?;
         }
         Ok(())
     }
 
-    async fn send(&self, buf: &[u8], addr: Self::Addr) -> Result<usize> {
-        try_async(|| self.inner.send_to(buf, addr)).await
+    async fn send<D>(&self, data: &D, addr: Self::Addr) -> std::result::Result<(), Self::Error>
+    where
+        D: Serialize + ?Sized,
+    {
+        let dat =
+            postcard::to_allocvec(data).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+        try_async(|| self.inner.send_to(&dat, addr)).await?;
+        Ok(())
     }
 
-    async fn recv(&self, buf: &mut [u8]) -> Result<(usize, Self::Addr)> {
-        try_async(|| self.inner.recv_from(buf)).await
+    async fn recv<D>(&self) -> std::result::Result<(D, Self::Addr), Self::Error>
+    where
+        D: DeserializeOwned,
+    {
+        let mut buf = [0u8; 1024];
+        let (len, addr) = try_async(|| self.inner.recv_from(&mut buf)).await?;
+        Ok((
+            postcard::from_bytes(&buf[..len])
+                .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?,
+            addr,
+        ))
     }
 }

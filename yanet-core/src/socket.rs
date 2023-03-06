@@ -1,13 +1,22 @@
 use futures_micro::Future;
+use serde::{de::DeserializeOwned, Serialize};
 
 pub trait Socket: Sized {
     type Addr;
     type Error;
+    async fn broadcast<D>(&self, data: &D) -> Result<(), Self::Error>
+    where
+        D: Serialize;
 
-    async fn broadcast(&self, buf: &[u8]) -> Result<(), Self::Error>;
-    async fn send(&self, buf: &[u8], addr: Self::Addr) -> Result<usize, Self::Error>;
-    async fn recv(&self, buf: &mut [u8]) -> Result<(usize, Self::Addr), Self::Error>;
-    async fn or<S: Socket>(self, other: S) -> Or<Self, S> {
+    async fn send<D>(&self, data: &D, addr: Self::Addr) -> Result<(), Self::Error>
+    where
+        D: Serialize + ?Sized;
+
+    async fn recv<D>(&self) -> Result<(D, Self::Addr), Self::Error>
+    where
+        D: DeserializeOwned;
+
+    fn or<S: Socket>(self, other: S) -> Or<Self, S> {
         Or { this: self, other }
     }
 }
@@ -25,19 +34,35 @@ pub enum Either<T, O> {
 
 impl<T: Socket, O: Socket> Socket for Or<T, O> {
     type Addr = Either<T::Addr, O::Addr>;
+
     type Error = Either<T::Error, O::Error>;
 
-    async fn send(&self, buf: &[u8], addr: Self::Addr) -> Result<usize, Self::Error> {
+    async fn broadcast<D>(&self, data: &D) -> Result<(), Self::Error>
+    where
+        D: Serialize,
+    {
+        self.this.broadcast(data).await.map_err(Either::This)?;
+        self.other.broadcast(data).await.map_err(Either::Other)?;
+        Ok(())
+    }
+
+    async fn send<D>(&self, data: &D, addr: Self::Addr) -> Result<(), Self::Error>
+    where
+        D: Serialize + ?Sized,
+    {
         match addr {
-            Either::This(addr) => Ok(self.this.send(buf, addr).await.map_err(Either::This)?),
-            Either::Other(addr) => Ok(self.other.send(buf, addr).await.map_err(Either::Other)?),
+            Either::This(addr) => Ok(self.this.send(data, addr).await.map_err(Either::This)?),
+            Either::Other(addr) => Ok(self.other.send(data, addr).await.map_err(Either::Other)?),
         }
     }
 
-    async fn recv(&self, buf: &mut [u8]) -> Result<(usize, Self::Addr), Self::Error> {
+    async fn recv<D>(&self) -> Result<(D, Self::Addr), Self::Error>
+    where
+        D: DeserializeOwned,
+    {
         loop {
             {
-                let future = self.this.recv(buf);
+                let future = self.this.recv();
                 futures_micro::pin!(future);
                 let waker = futures_micro::waker().await;
                 let mut context = futures_micro::Context::from_waker(&waker);
@@ -48,7 +73,7 @@ impl<T: Socket, O: Socket> Socket for Or<T, O> {
                 }
             }
             {
-                let future = self.other.recv(buf);
+                let future = self.other.recv();
                 futures_micro::pin!(future);
                 let waker = futures_micro::waker().await;
                 let mut context = futures_micro::Context::from_waker(&waker);
@@ -59,11 +84,5 @@ impl<T: Socket, O: Socket> Socket for Or<T, O> {
                 }
             }
         }
-    }
-
-    async fn broadcast(&self, buf: &[u8]) -> Result<(), Self::Error> {
-        self.this.broadcast(buf).await.map_err(Either::This)?;
-        self.other.broadcast(buf).await.map_err(Either::Other)?;
-        Ok(())
     }
 }

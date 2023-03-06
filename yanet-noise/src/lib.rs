@@ -1,14 +1,26 @@
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
 
-use async_channel::{Receiver, Sender};
-use async_executor::LocalExecutor;
 use serde::{Deserialize, Serialize};
 use snow::{HandshakeState, TransportState};
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
-use yanet_core::{ServiceName, Socket};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
+};
+use yanet_core::Socket;
 
-#[derive(Default)]
+fn builder(init: bool, pkey: [u8; 32]) -> HandshakeState {
+    let builder = snow::Builder::new("Noise_XX_25519_ChaChaPoly_BLAKE2s".parse().unwrap())
+        .local_private_key(&pkey);
+    if init {
+        builder.build_initiator().unwrap()
+    } else {
+        builder.build_responder().unwrap()
+    }
+}
+
+#[derive(Default, Debug)]
 pub enum NoiseSession {
     #[default]
     Initiating,
@@ -33,6 +45,7 @@ impl NoiseSession {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[repr(u8)]
 enum Msg {
     Hello,
     XX1(Vec<u8>),
@@ -41,6 +54,7 @@ enum Msg {
     Payload(u64, Vec<u8>),
 }
 
+#[derive(Debug)]
 pub enum Error<E> {
     Noise(snow::Error),
     Io(E),
@@ -63,9 +77,7 @@ impl<S: Socket> NoiseSocket<S> {
     }
     pub async fn advertise(&self) -> Result<(), Error<S::Error>> {
         let hello = Msg::Hello;
-        let mut buf = [0u8; 8];
-        let mut msg = postcard::to_slice(&hello, &mut buf).map_err(Error::Serde)?;
-        self.socket.broadcast(&mut msg).await.map_err(Error::Io)?;
+        self.socket.broadcast(&hello).await.map_err(Error::Io)?;
         Ok(())
     }
 }
@@ -73,118 +85,135 @@ impl<S: Socket> NoiseSocket<S> {
 impl<S> Socket for NoiseSocket<S>
 where
     S: Socket,
-    S::Addr: Ord + Clone,
+    S::Error: Debug,
+    S::Addr: Ord + Clone + Debug,
 {
     type Addr = [u8; 32];
     type Error = Error<S::Error>;
-    async fn broadcast(&self, buf: &[u8]) -> Result<(), Self::Error> {
-        let socket_addrs: Vec<S::Addr> = self
+
+    async fn broadcast<D>(&self, data: &D) -> Result<(), Self::Error>
+    where
+        D: Serialize,
+    {
+        let addrs: BTreeSet<[u8; 32]> = self
             .sessions
             .borrow()
             .iter()
-            .filter(|(_a, s)| s.get_remote_static().is_some())
-            .map(|(a, _s)| a.clone())
+            .filter_map(|(_a, s)| s.get_remote_static())
             .collect();
-        for addr in socket_addrs {
-            buf = vec![0u8; buf.len() + 16];
-
-            //self.socket.send
+        for addr in addrs {
+            self.send(data, addr).await?;
         }
         Ok(())
     }
-    async fn send(&self, buf: &[u8], addr: Self::Addr) -> Result<usize, Error<S::Error>> {
-        let socket_addrs: Vec<_> = self
+
+    async fn send<D>(&self, data: &D, addr: Self::Addr) -> Result<(), Self::Error>
+    where
+        D: Serialize + ?Sized,
+    {
+        let ret = self
             .sessions
-            .borrow()
-            .iter()
-            .filter(|(_a, s)| s.get_remote_static() == Some(addr))
-            .map(|(a, _s)| a)
-            .collect();
-        Ok(0)
+            .borrow_mut()
+            .iter_mut()
+            .find_map(|(_a, s)| match s {
+                NoiseSession::Transport(t) if t.get_remote_static() == Some(addr.as_slice()) => {
+                    return Some((_a, t))
+                }
+                _ => None,
+            })
+            .map(|(a, t)| -> Result<_, Error<S::Error>> {
+                let mut buf = [0u8; 1024];
+                let buf = postcard::to_slice(data, &mut buf).map_err(Error::Serde)?;
+                let mut write_buf = [0u8; 1024];
+                let nonce = t.sending_nonce();
+                let len = t.write_message(buf, &mut write_buf).map_err(Error::Noise)?;
+                let msg = Msg::Payload(nonce, write_buf[..len].to_vec());
+                Ok((a.clone(), msg))
+            })
+            .transpose()?;
+        if let Some((a, m)) = ret {
+            self.socket.send(&m, a).await.map_err(Error::Io)?;
+        }
+        Ok(())
     }
 
-    async fn recv(&self, buf: &mut [u8]) -> Result<(usize, [u8; 32]), Error<S::Error>> {
-        let mut send_buf = [0u8; 128];
-        let mut send_len = 0;
-        let mut send_addr: Option<S::Addr> = None;
+    async fn recv<D>(&self) -> Result<(D, Self::Addr), Self::Error>
+    where
+        D: serde::de::DeserializeOwned,
+    {
+        let mut hs_buf = [0u8; 128];
+        let mut send_first: Option<(Msg, S::Addr)> = None;
+
         loop {
-            if let Some(addr) = send_addr.take() {
-                self.socket
-                    .send(&send_buf[..send_len], addr)
-                    .await
-                    .map_err(Error::Io)?;
+            if let Some((data, addr)) = send_first.take() {
+                self.socket.send(&data, addr).await.map_err(Error::Io)?;
             }
 
-            let (len, addr) = self.socket.recv(buf).await.map_err(Error::Io)?;
-            let msg = postcard::from_bytes::<Msg>(&buf[..len]).map_err(Error::Serde)?;
+            let (msg, addr) = self.socket.recv::<Msg>().await.map_err(Error::Io)?;
 
             let mut sessions = self.sessions.borrow_mut();
             let entry = sessions.entry(addr.clone()).or_default();
             match (core::mem::take(entry), msg) {
                 (NoiseSession::Initiating, Msg::Hello) => {
                     let mut hs = Box::new(builder(true, self.private_key));
-                    send_len = hs.write_message(&[], &mut send_buf).map_err(Error::Noise)?;
-                    send_addr = Some(addr);
+                    let len = hs.write_message(&[], &mut hs_buf).map_err(Error::Noise)?;
+                    send_first = Some((Msg::XX1(hs_buf[..len].to_vec()), addr));
                     let mut xx1 = [0u8; 32];
-                    xx1.copy_from_slice(&send_buf[..32]);
+                    xx1.copy_from_slice(&hs_buf[..32]);
                     *entry = NoiseSession::XX1Sent(xx1, hs);
                 }
                 (NoiseSession::XX1Sent(xx1, _), Msg::XX1(vec)) => {
                     if vec.as_slice() > xx1.as_slice() {
                         let mut hs = Box::new(builder(false, self.private_key));
-                        hs.read_message(vec.as_slice(), buf).map_err(Error::Noise)?;
-                        send_len = hs.write_message(&[], &mut send_buf).map_err(Error::Noise)?;
-                        send_addr = Some(addr);
+                        hs.read_message(vec.as_slice(), &mut hs_buf)
+                            .map_err(Error::Noise)?;
+                        let len = hs.write_message(&[], &mut hs_buf).map_err(Error::Noise)?;
+                        send_first = Some((Msg::XX2(hs_buf[..len].to_vec()), addr));
                         *entry = NoiseSession::XX2Sent(hs);
                     }
                 }
                 (NoiseSession::XX1Sent(_, mut hs), Msg::XX2(vec)) => {
                     // <- 2
-                    hs.read_message(&vec, buf).map_err(Error::Noise)?;
+                    hs.read_message(&vec, &mut hs_buf).map_err(Error::Noise)?;
                     // -> 3
-                    send_len = hs.write_message(&[], &mut send_buf).map_err(Error::Noise)?;
-                    send_addr = Some(addr);
+                    let len = hs.write_message(&[], &mut hs_buf).map_err(Error::Noise)?;
+                    send_first = Some((Msg::XX3(hs_buf[..len].to_vec()), addr));
                     let transport = hs.into_transport_mode().map_err(Error::Noise)?;
                     *entry = NoiseSession::Transport(transport);
                 }
                 (NoiseSession::XX2Sent(mut hs), Msg::XX3(msg)) => {
-                    hs.read_message(&msg, buf).map_err(Error::Noise)?;
+                    hs.read_message(&msg, &mut hs_buf).map_err(Error::Noise)?;
                     let transport = hs.into_transport_mode().map_err(Error::Noise)?;
                     *entry = NoiseSession::Transport(transport);
                 }
                 (NoiseSession::Transport(mut t), Msg::Payload(nonce, msg)) => {
-                    let len = t.read_message(&msg, buf).map_err(Error::Noise)?;
+                    if nonce >= t.receiving_nonce() {
+                        t.set_receiving_nonce(nonce);
+                    }
+                    let len = t.read_message(&msg, &mut hs_buf).map_err(Error::Noise)?;
                     *entry = NoiseSession::Transport(t);
-                    return Ok((len, entry.get_remote_static().unwrap()));
+                    let ret = postcard::from_bytes(&hs_buf[..len]).map_err(Error::Serde)?;
+                    return Ok((ret, entry.get_remote_static().unwrap()));
                 }
 
                 (_, Msg::XX1(msg)) => {
                     let mut hs = Box::new(builder(false, self.private_key));
-                    hs.read_message(msg.as_slice(), buf).map_err(Error::Noise)?;
-                    send_len = hs.write_message(&[], &mut send_buf).map_err(Error::Noise)?;
-                    send_addr = Some(addr);
+                    hs.read_message(msg.as_slice(), &mut hs_buf)
+                        .map_err(Error::Noise)?;
+                    let len = hs.write_message(&[], &mut hs_buf).map_err(Error::Noise)?;
+                    send_first = Some((Msg::XX2(hs_buf[..len].to_vec()), addr));
                     *entry = NoiseSession::XX2Sent(hs);
                 }
                 (_, Msg::Payload(_, _)) => {
                     let mut hs = Box::new(builder(true, self.private_key));
-                    send_len = hs.write_message(&[], &mut send_buf).map_err(Error::Noise)?;
-                    send_addr = Some(addr);
+                    let len = hs.write_message(&[], &mut hs_buf).map_err(Error::Noise)?;
+                    send_first = Some((Msg::XX1(hs_buf[..len].to_vec()), addr));
                     let mut xx1 = [0u8; 32];
-                    xx1.copy_from_slice(&send_buf[..32]);
+                    xx1.copy_from_slice(&hs_buf[..32]);
                     *entry = NoiseSession::XX1Sent(xx1, hs);
                 }
                 _ => {}
             }
         }
-    }
-}
-
-fn builder(init: bool, pkey: [u8; 32]) -> HandshakeState {
-    let builder = snow::Builder::new("Noise_XX_25519_ChaChaPoly_BLAKE2s".parse().unwrap())
-        .local_private_key(&pkey);
-    if init {
-        builder.build_initiator().unwrap()
-    } else {
-        builder.build_responder().unwrap()
     }
 }
