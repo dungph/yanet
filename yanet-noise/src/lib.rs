@@ -9,16 +9,6 @@ use std::{
 };
 use yanet_core::Socket;
 
-fn builder(init: bool, pkey: [u8; 32]) -> HandshakeState {
-    let builder = snow::Builder::new("Noise_XX_25519_ChaChaPoly_BLAKE2s".parse().unwrap())
-        .local_private_key(&pkey);
-    if init {
-        builder.build_initiator().unwrap()
-    } else {
-        builder.build_responder().unwrap()
-    }
-}
-
 #[derive(Default, Debug)]
 pub enum NoiseSession {
     #[default]
@@ -26,21 +16,6 @@ pub enum NoiseSession {
     XX1Sent([u8; 32], Box<HandshakeState>),
     XX2Sent(Box<HandshakeState>),
     Transport(TransportState),
-}
-
-impl NoiseSession {
-    pub fn get_remote_static(&self) -> Option<[u8; 32]> {
-        match self {
-            Self::Transport(t) => t.get_remote_static().map(|v| v.try_into().unwrap()),
-            _ => None,
-        }
-    }
-    pub fn transport(&mut self) -> Option<&mut TransportState> {
-        match self {
-            Self::Transport(t) => Some(t),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -67,17 +42,15 @@ pub struct NoiseSocket<S: Socket> {
 }
 
 impl<S: Socket> NoiseSocket<S> {
-    pub fn new(private_key: [u8; 32], socket: S) -> Self {
-        Self {
-            private_key,
+    pub fn new(p: [u8; 32], socket: S) -> Self {
+        NoiseSocket {
+            private_key: p,
             socket,
             sessions: Default::default(),
         }
     }
     pub async fn advertise(&mut self) -> Result<(), Error<S::Error>> {
-        let hello = Msg::Hello;
-        self.socket.broadcast(&hello).await.map_err(Error::Io)?;
-        Ok(())
+        self.socket.broadcast(&Msg::Hello).await.map_err(Error::Io)
     }
 }
 
@@ -209,6 +182,25 @@ where
                 }
                 _ => {}
             }
+        }
+    }
+}
+
+fn builder(init: bool, pkey: [u8; 32]) -> HandshakeState {
+    let builder = snow::Builder::new("Noise_XX_25519_ChaChaPoly_BLAKE2s".parse().unwrap())
+        .local_private_key(&pkey);
+    if init {
+        builder.build_initiator().unwrap()
+    } else {
+        builder.build_responder().unwrap()
+    }
+}
+
+impl NoiseSession {
+    pub fn get_remote_static(&self) -> Option<[u8; 32]> {
+        match self {
+            Self::Transport(t) => t.get_remote_static().map(|v| v.try_into().unwrap()),
+            _ => None,
         }
     }
 }

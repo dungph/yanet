@@ -1,6 +1,6 @@
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use yanet_core::{Service, ServiceName, Socket};
 
@@ -22,7 +22,7 @@ impl ServiceName for Pinger {
 }
 impl<S> Service<S> for Pinger
 where
-    S: Socket + Clone,
+    S: Socket,
     S::Addr: std::fmt::Debug,
 {
     type Output = ();
@@ -30,19 +30,20 @@ where
     type Error = S::Error;
 
     async fn upgrade(&self, mut socket: S) -> Result<Self::Output, Self::Error> {
-        let mut socket1 = socket.clone();
-        let task1 = async {
-            loop {
-                futures_timer::Delay::new(self.dur).await;
-                socket1.broadcast(&"hello").await?;
+        let mut start = Instant::now();
+        loop {
+            if start.elapsed() > self.dur {
+                socket.broadcast(&"hello").await?;
+                start = Instant::now();
             }
-        };
-        let task2 = async {
-            loop {
-                let (s, a) = socket.recv::<String>().await?;
+            let sleep = async {
+                futures_timer::Delay::new(self.dur - start.elapsed()).await;
+                None
+            };
+            let recv = async { Some(socket.recv::<String>().await) };
+            if let Some((s, a)) = futures_micro::or!(sleep, recv).await.transpose()? {
                 println!("received {} from {:?}", s, a);
             }
-        };
-        futures_micro::or!(task1, task2).await
+        }
     }
 }

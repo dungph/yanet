@@ -15,6 +15,7 @@ pub enum Error<E> {
     Socket(E),
     Serde(postcard::Error),
 }
+
 pub struct Muxer<S: Socket> {
     socket: Rc<RefCell<S>>,
     handlers: Rc<DashMap<String, Sender<(Vec<u8>, S::Addr)>>>,

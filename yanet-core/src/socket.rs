@@ -19,6 +19,10 @@ pub trait Socket: Sized {
     fn or<S: Socket>(self, other: S) -> Or<Self, S> {
         Or { this: self, other }
     }
+
+    fn then<R>(self, then: impl FnOnce(Self) -> R) -> R {
+        then(self)
+    }
 }
 
 pub struct Or<T, O> {
